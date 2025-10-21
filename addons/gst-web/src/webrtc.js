@@ -239,11 +239,24 @@ class WebRTCDemo {
      */
     _onSignalingICE(icecandidate) {
         this._setDebug("received ice candidate from signaling server: " + JSON.stringify(icecandidate));
-        if (this.forceTurn && JSON.stringify(icecandidate).indexOf("relay") < 0) { // if no relay address is found, assuming it means no TURN server
-            this._setDebug("Rejecting non-relay ICE candidate: " + JSON.stringify(icecandidate));
-            return;
+        
+        // Enhanced relay checking for forceTurn mode
+        if (this.forceTurn) {
+            const candidateStr = JSON.stringify(icecandidate);
+            const isRelay = icecandidate.candidate && 
+                           (icecandidate.candidate.includes('typ relay') || 
+                            icecandidate.type === 'relay');
+            
+            if (!isRelay) {
+                this._setDebug("Rejecting non-relay ICE candidate (forceTurn enabled): " + candidateStr);
+                return;
+            }
+            this._setDebug("Accepting relay ICE candidate: " + candidateStr);
         }
-        this.peerConnection.addIceCandidate(icecandidate).catch(this._setError);
+        
+        this.peerConnection.addIceCandidate(icecandidate).catch((err) => {
+            this._setError("Failed to add ICE candidate: " + err.message);
+        });
     }
 
     /**
@@ -674,6 +687,38 @@ class WebRTCDemo {
                     connectionDetails.audio.jitterBufferEmittedCount = reports.audioRTP.jitterBufferEmittedCount;
                 }
 
+                // ICE candidate pair information
+                if (reports.selectedCandidatePairId !== null) {
+                    var candidatePair = reports.candidatePairs[reports.selectedCandidatePairId];
+                    if (candidatePair !== undefined) {
+                        connectionDetails.ice = {
+                            state: candidatePair.state,
+                            priority: candidatePair.priority,
+                            nominated: candidatePair.nominated,
+                            writable: candidatePair.writable,
+                            localCandidateType: 'unknown',
+                            remoteCandidateType: 'unknown',
+                            transportProtocol: 'unknown'
+                        };
+                        
+                        // Find local and remote candidate types
+                        allReports.forEach((report) => {
+                            if (report.type === 'local-candidate' && report.id === candidatePair.localCandidateId) {
+                                connectionDetails.ice.localCandidateType = report.candidateType;
+                                connectionDetails.ice.transportProtocol = report.protocol;
+                            }
+                            if (report.type === 'remote-candidate' && report.id === candidatePair.remoteCandidateId) {
+                                connectionDetails.ice.remoteCandidateType = report.candidateType;
+                            }
+                        });
+                        
+                        // Log to console for debugging
+                        console.log('[ICE] Active connection:', 
+                            connectionDetails.ice.localCandidateType + ' -> ' + connectionDetails.ice.remoteCandidateType,
+                            '(' + connectionDetails.ice.transportProtocol + ')');
+                    }
+                }
+
                 // DEBUG
                 connectionDetails.reports = reports;
                 connectionDetails.allReports = allReports;
@@ -711,11 +756,63 @@ class WebRTCDemo {
      * Initiate connection to signaling server.
      */
     connect() {
+        // Apply optimizations from configuration
+        const config = {
+            ...this.rtcPeerConfig,
+            iceTransportPolicy: this.forceTurn ? "relay" : (this.rtcPeerConfig.iceTransportPolicy || "all"),
+            bundlePolicy: this.rtcPeerConfig.bundlePolicy || "max-bundle",
+            rtcpMuxPolicy: "require",
+            iceCandidatePoolSize: this.rtcPeerConfig.iceCandidatePoolSize || 10
+        };
+        
+        this._setDebug("Creating peer connection with config: " + JSON.stringify(config, null, 2));
+        
         // Create the peer connection object and bind callbacks.
-        this.peerConnection = new RTCPeerConnection(this.rtcPeerConfig);
+        this.peerConnection = new RTCPeerConnection(config);
         this.peerConnection.ontrack = this._ontrack.bind(this);
         this.peerConnection.onicecandidate = this._onPeerICE.bind(this);
         this.peerConnection.ondatachannel = this._onPeerdDataChannel.bind(this);
+
+        // ICE Connection State - with automatic restart
+        this.peerConnection.oniceconnectionstatechange = () => {
+            const state = this.peerConnection.iceConnectionState;
+            this._setDebug("ICE connection state: " + state);
+            
+            if (state === 'failed') {
+                this._setError('ICE connection failed, attempting restart...');
+                // Attempt ICE restart
+                if (this.peerConnection.restartIce) {
+                    this.peerConnection.restartIce();
+                    this._setStatus('ICE restart initiated');
+                }
+            } else if (state === 'disconnected') {
+                this._setStatus('ICE connection disconnected, monitoring...');
+            } else if (state === 'connected' || state === 'completed') {
+                this._setStatus('ICE connection ' + state);
+            }
+        };
+
+        // ICE Gathering State - for debugging
+        this.peerConnection.onicegatheringstatechange = () => {
+            const state = this.peerConnection.iceGatheringState;
+            this._setDebug("ICE gathering state: " + state);
+            
+            if (state === 'complete') {
+                this._setStatus('ICE gathering complete');
+            }
+        };
+
+        // ICE Candidate Error - for diagnostics
+        if (this.peerConnection.onicecandidateerror !== undefined) {
+            this.peerConnection.onicecandidateerror = (event) => {
+                // Don't log non-critical errors as errors
+                if (event.errorCode >= 400 && event.errorCode < 500) {
+                    this._setDebug("ICE candidate error (non-critical): " + event.errorText + " (" + event.errorCode + ")");
+                } else {
+                    this._setError("ICE candidate error: " + event.errorText + " (" + event.errorCode + ")");
+                }
+            };
+        }
 
         this.peerConnection.onconnectionstatechange = () => {
             // Local event handling.
@@ -727,9 +824,9 @@ class WebRTCDemo {
 
         if (this.forceTurn) {
             this._setStatus("forcing use of TURN server");
-            var config = this.peerConnection.getConfiguration();
-            config.iceTransportPolicy = "relay";
-            this.peerConnection.setConfiguration(config);
+            var peerConfig = this.peerConnection.getConfiguration();
+            peerConfig.iceTransportPolicy = "relay";
+            this.peerConnection.setConfiguration(peerConfig);
         }
 
         this.signaling.peer_id = this.peer_id;

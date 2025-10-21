@@ -841,13 +841,27 @@ fetch("./turn")
             webrtc.element.style.height = app.windowResolution[1]/window.devicePixelRatio+'px';
         }
 
+        // Enhanced ICE configuration logging
+        console.log('[ICE] Received configuration:', config);
+        console.log('[ICE] Bundle policy:', config.bundlePolicy || 'default');
+        console.log('[ICE] Candidate pool size:', config.iceCandidatePoolSize || 0);
+        console.log('[ICE] STUN servers:', config.iceServers[0]?.urls || []);
+        
         if (config.iceServers.length > 1) {
-            app.debugEntries.push(applyTimestamp("[app] using TURN servers: " + config.iceServers[1].urls.join(", ")));
+            const turnServers = config.iceServers.slice(1).map(s => s.urls).flat();
+            app.debugEntries.push(applyTimestamp("[app] using TURN servers: " + turnServers.join(", ")));
+            console.log('[ICE] TURN servers:', turnServers);
         } else {
             app.debugEntries.push(applyTimestamp("[app] no TURN servers found."));
+            console.warn('[ICE] No TURN servers configured - connections may fail behind NAT/firewall');
         }
+        
         webrtc.rtcPeerConfig = config;
         audio_webrtc.rtcPeerConfig = config;
         webrtc.connect();
         audio_webrtc.connect();
+    })
+    .catch(err => {
+        console.error('[ICE] Failed to fetch TURN configuration:', err);
+        app.debugEntries.push(applyTimestamp("[app] ERROR: Failed to load ICE configuration"));
     });
