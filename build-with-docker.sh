@@ -51,7 +51,7 @@ echo -e "${GREEN}[2/4] Building web interface in Docker...${NC}"
 docker run --rm \
     -v "${REPO_ROOT}:/workspace" \
     -w /workspace/addons/gst-web \
-    ubuntu:22.04 bash -c "
+    ubuntu:24.04 bash -c "
         tar -czf /workspace/dist/selkies-gstreamer-web_v${VERSION}.tar.gz src/ && \
         echo 'Web interface archive created'
     "
@@ -69,20 +69,37 @@ fi
 echo -e "${GREEN}[3/4] Building JS Interposer (optional)...${NC}"
 if [ -f "addons/js-interposer/Dockerfile.debpkg" ]; then
     echo "  Building DEB package via Docker..."
-    docker build -f addons/js-interposer/Dockerfile.debpkg \
+    
+    # Сборка с обработкой ошибок
+    if docker build \
+        --build-arg DISTRIB_RELEASE="24.04" \
+        --build-arg PKG_NAME="selkies-js-interposer" \
+        --build-arg PKG_VERSION="1.0.0" \
+        --build-arg DEBFULLNAME="Build User" \
+        --build-arg DEBEMAIL="build@localhost" \
+        -f addons/js-interposer/Dockerfile.debpkg \
         -t selkies-js-interposer-builder \
-        addons/js-interposer/ 2>&1 | tail -n20
-    
-    # Извлечь .deb из образа
-    CONTAINER_ID=$(docker create selkies-js-interposer-builder)
-    docker cp "${CONTAINER_ID}:/tmp/" /tmp/js-interposer-extract/ || \
-        docker cp "${CONTAINER_ID}:/" /tmp/js-interposer-extract/
-    docker rm "${CONTAINER_ID}"
-    
-    # Найти и скопировать .deb
-    find /tmp/js-interposer-extract -name "*.deb" -exec cp {} dist/ \; 2>/dev/null || \
-        echo -e "${YELLOW}  ⚠ JS Interposer not built (optional)${NC}"
-    rm -rf /tmp/js-interposer-extract
+        addons/js-interposer/ 2>&1 | tee /tmp/js-build.log | tail -n20; then
+        
+        # Извлечь .deb из образа
+        CONTAINER_ID=$(docker create selkies-js-interposer-builder)
+        docker cp "${CONTAINER_ID}:/opt/" /tmp/js-interposer-extract/ 2>/dev/null || true
+        docker rm "${CONTAINER_ID}" >/dev/null
+        
+        # Найти и скопировать .deb
+        if find /tmp/js-interposer-extract -name "*.deb" -exec cp {} dist/ \; 2>/dev/null; then
+            DEB_FILE=$(ls -t dist/selkies-js-interposer*.deb 2>/dev/null | head -n1)
+            if [ -n "${DEB_FILE}" ]; then
+                echo -e "${GREEN}✓ JS Interposer: $(basename ${DEB_FILE})${NC}"
+            fi
+        else
+            echo -e "${YELLOW}  ⚠ JS Interposer .deb not found (optional)${NC}"
+        fi
+        rm -rf /tmp/js-interposer-extract
+    else
+        echo -e "${YELLOW}  ⚠ JS Interposer build failed (optional, can skip)${NC}"
+        echo "  This component is optional for ICE optimizations."
+    fi
 else
     echo -e "${YELLOW}  ⚠ Skipping JS Interposer (no Dockerfile.debpkg)${NC}"
 fi
