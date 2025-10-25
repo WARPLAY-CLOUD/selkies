@@ -50,8 +50,8 @@ echo ""
 # 1. Сборка Python wheel
 # =======================
 echo -e "${GREEN}[1/4] Building Python wheel package...${NC}"
-python3 -m pip install --user --upgrade build wheel setuptools 2>/dev/null || \
-    pip3 install --upgrade build wheel setuptools
+python3 -m pip install --user --upgrade --break-system-packages build wheel setuptools 2>/dev/null || \
+    pip3 install --upgrade --break-system-packages build wheel setuptools
 
 if ! python3 -m build --wheel 2>&1 | tee /tmp/build-wheel.log; then
     echo -e "${YELLOW}⚠ Python build tool failed, trying direct setup.py${NC}"
