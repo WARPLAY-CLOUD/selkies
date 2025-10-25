@@ -2,7 +2,7 @@
 # Использует Docker для кросс-платформенной сборки
 
 param(
-    [string]$UbuntuVersion = "22.04",
+    [string]$UbuntuVersion = "24.04",
     [switch]$SkipGStreamer = $false,
     [switch]$SkipJSInterposer = $false
 )

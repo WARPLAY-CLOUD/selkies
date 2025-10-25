@@ -11,7 +11,7 @@ services:
       dockerfile: Dockerfile
       args:
         DISTRIB_IMAGE: ubuntu
-        DISTRIB_RELEASE: "22.04" # или 20.04, 24.04
+        DISTRIB_RELEASE: "24.04"
         GSTREAMER_VERSION: "1.24.12"
     image: selkies-gstreamer:local
     container_name: selkies-gstreamer-builder
@@ -44,7 +44,7 @@ services:
       dockerfile: Dockerfile.debpkg
       args:
         DISTRIB_IMAGE: ubuntu
-        DISTRIB_RELEASE: "22.04"
+        DISTRIB_RELEASE: "24.04"
         PKG_NAME: "selkies-js-interposer"
         PKG_VERSION: "1.0.0"
         DEBFULLNAME: "Build User"
@@ -55,7 +55,7 @@ services:
 
   # Извлечение артефактов из всех образов
   extract:
-    image: ubuntu:22.04
+    image: ubuntu:24.04
     container_name: selkies-extract
     volumes:
       - ./dist:/dist

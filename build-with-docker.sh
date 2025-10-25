@@ -99,7 +99,7 @@ if [ -f "addons/gstreamer/Dockerfile" ]; then
     echo "  Building GStreamer via Docker..."
     
     # Определить Ubuntu версию
-    UBUNTU_VERSION="22.04"  # Можно изменить на 20.04 или 24.04
+    UBUNTU_VERSION="24.04"
     ARCH="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
     
     # Собрать образ
