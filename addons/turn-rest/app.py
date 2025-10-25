@@ -21,14 +21,6 @@ if not stun_port.isdigit():
 turn_protocol_default = os.environ.get('TURN_PROTOCOL', 'udp')
 turn_tls_default = os.environ.get('TURN_TLS', 'false')
 
-# Support for multiple STUN servers (comma-separated)
-stun_hosts = os.environ.get('STUN_HOSTS', '').split(',') if os.environ.get('STUN_HOSTS') else []
-stun_hosts = [h.strip().lower() for h in stun_hosts if h.strip()]
-
-# Support for multiple TURN servers (comma-separated)
-turn_hosts = os.environ.get('TURN_HOSTS', '').split(',') if os.environ.get('TURN_HOSTS') else []
-turn_hosts = [h.strip().lower() for h in turn_hosts if h.strip()]
-
 app = Flask(__name__)
 
 @app.route('/', methods=['GET','POST'])
@@ -63,61 +55,27 @@ def turn_rest():
     password = base64.b64encode(hashed).decode()
 
     # Configure STUN servers
-    stun_list = []
-    
-    # Add multiple STUN servers from STUN_HOSTS
-    if stun_hosts:
-        for shost in stun_hosts:
-            stun_list.append("stun:{}:19302".format(shost))
-    else:
-        # Legacy logic for backwards compatibility
-        stun_list.append("stun:{}:{}".format(turn_host, turn_port))
-        if stun_host is not None and stun_port is not None and (stun_host != turn_host or str(stun_port) != str(turn_port)):
-            stun_list.insert(0, "stun:{}:{}".format(stun_host, stun_port))
-    
-    # Always add Google STUN servers as fallback
-    google_stun_servers = [
-        "stun:stun.l.google.com:19302",
-        "stun:stun1.l.google.com:19302",
-        "stun:stun2.l.google.com:19302"
-    ]
-    for gstun in google_stun_servers:
-        if gstun not in stun_list:
-            stun_list.append(gstun)
+    stun_list = ["stun:{}:{}".format(turn_host, turn_port)]
+    if stun_host is not None and stun_port is not None and (stun_host != turn_host or str(stun_port) != str(turn_port)):
+        stun_list.insert(0, "stun:{}:{}".format(stun_host, stun_port))
+    if stun_host != "stun.l.google.com" or (str(stun_port) != "19302"):
+        stun_list.append("stun:stun.l.google.com:19302")
 
     rtc_config = {}
     rtc_config["lifetimeDuration"] = "{}s".format(expiry_hour * 3600)
     rtc_config["blockStatus"] = "NOT_BLOCKED"
     rtc_config["iceTransportPolicy"] = "all"
-    rtc_config["iceCandidatePoolSize"] = int(os.environ.get('ICE_CANDIDATE_POOL_SIZE', '10'))
-    rtc_config["bundlePolicy"] = os.environ.get('ICE_BUNDLE_POLICY', 'max-bundle')
     rtc_config["iceServers"] = []
-    
-    # STUN servers
     rtc_config["iceServers"].append({
         "urls": stun_list
     })
-    
-    # TURN servers (support for multiple)
-    if turn_hosts:
-        # Multiple TURN servers
-        for thost in turn_hosts:
-            rtc_config["iceServers"].append({
-                "urls": [
-                    "{}:{}:{}?transport={}".format('turns' if turn_tls else 'turn', thost, turn_port, protocol)
-                ],
-                "username": username,
-                "credential": password
-            })
-    else:
-        # Single TURN server (backwards compatibility)
-        rtc_config["iceServers"].append({
-            "urls": [
-                "{}:{}:{}?transport={}".format('turns' if turn_tls else 'turn', turn_host, turn_port, protocol)
-            ],
-            "username": username,
-            "credential": password
-        })
+    rtc_config["iceServers"].append({
+        "urls": [
+            "{}:{}:{}?transport={}".format('turns' if turn_tls else 'turn', turn_host, turn_port, protocol)
+        ],
+        "username": username,
+        "credential": password
+    })
 
     return json.dumps(rtc_config, indent=2)
 

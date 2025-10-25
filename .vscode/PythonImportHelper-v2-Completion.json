@@ -2958,7 +2958,7 @@
         "kind": 5,
         "importPath": "addons.turn-rest.app",
         "description": "addons.turn-rest.app",
-        "peekOfCode": "stun_host = os.environ.get('STUN_HOST', turn_host)\nif stun_host:\n    stun_host = stun_host.lower()\nstun_port = os.environ.get('STUN_PORT', turn_port)\nif not stun_port.isdigit():\n    stun_host, stun_port = 'stun.l.google.com', '19302'\nturn_protocol_default = os.environ.get('TURN_PROTOCOL', 'udp')\nturn_tls_default = os.environ.get('TURN_TLS', 'false')\n# Support for multiple STUN servers (comma-separated)\nstun_hosts = os.environ.get('STUN_HOSTS', '').split(',') if os.environ.get('STUN_HOSTS') else []",
+        "peekOfCode": "stun_host = os.environ.get('STUN_HOST', turn_host)\nif stun_host:\n    stun_host = stun_host.lower()\nstun_port = os.environ.get('STUN_PORT', turn_port)\nif not stun_port.isdigit():\n    stun_host, stun_port = 'stun.l.google.com', '19302'\nturn_protocol_default = os.environ.get('TURN_PROTOCOL', 'udp')\nturn_tls_default = os.environ.get('TURN_TLS', 'false')\napp = Flask(__name__)\n@app.route('/', methods=['GET','POST'])",
         "detail": "addons.turn-rest.app",
         "documentation": {}
     },
@@ -2967,7 +2967,7 @@
         "kind": 5,
         "importPath": "addons.turn-rest.app",
         "description": "addons.turn-rest.app",
-        "peekOfCode": "stun_port = os.environ.get('STUN_PORT', turn_port)\nif not stun_port.isdigit():\n    stun_host, stun_port = 'stun.l.google.com', '19302'\nturn_protocol_default = os.environ.get('TURN_PROTOCOL', 'udp')\nturn_tls_default = os.environ.get('TURN_TLS', 'false')\n# Support for multiple STUN servers (comma-separated)\nstun_hosts = os.environ.get('STUN_HOSTS', '').split(',') if os.environ.get('STUN_HOSTS') else []\nstun_hosts = [h.strip().lower() for h in stun_hosts if h.strip()]\n# Support for multiple TURN servers (comma-separated)\nturn_hosts = os.environ.get('TURN_HOSTS', '').split(',') if os.environ.get('TURN_HOSTS') else []",
+        "peekOfCode": "stun_port = os.environ.get('STUN_PORT', turn_port)\nif not stun_port.isdigit():\n    stun_host, stun_port = 'stun.l.google.com', '19302'\nturn_protocol_default = os.environ.get('TURN_PROTOCOL', 'udp')\nturn_tls_default = os.environ.get('TURN_TLS', 'false')\napp = Flask(__name__)\n@app.route('/', methods=['GET','POST'])\ndef turn_rest():\n    service_input = request.values.get('service') or 'turn'\n    if service_input:",
         "detail": "addons.turn-rest.app",
         "documentation": {}
     },
@@ -2976,7 +2976,7 @@
         "kind": 5,
         "importPath": "addons.turn-rest.app",
         "description": "addons.turn-rest.app",
-        "peekOfCode": "turn_protocol_default = os.environ.get('TURN_PROTOCOL', 'udp')\nturn_tls_default = os.environ.get('TURN_TLS', 'false')\n# Support for multiple STUN servers (comma-separated)\nstun_hosts = os.environ.get('STUN_HOSTS', '').split(',') if os.environ.get('STUN_HOSTS') else []\nstun_hosts = [h.strip().lower() for h in stun_hosts if h.strip()]\n# Support for multiple TURN servers (comma-separated)\nturn_hosts = os.environ.get('TURN_HOSTS', '').split(',') if os.environ.get('TURN_HOSTS') else []\nturn_hosts = [h.strip().lower() for h in turn_hosts if h.strip()]\napp = Flask(__name__)\n@app.route('/', methods=['GET','POST'])",
+        "peekOfCode": "turn_protocol_default = os.environ.get('TURN_PROTOCOL', 'udp')\nturn_tls_default = os.environ.get('TURN_TLS', 'false')\napp = Flask(__name__)\n@app.route('/', methods=['GET','POST'])\ndef turn_rest():\n    service_input = request.values.get('service') or 'turn'\n    if service_input:\n        service_input = service_input.lower()\n    username_input = request.values.get('username') or request.headers.get('x-auth-user') or request.headers.get('x-turn-username') or 'turn-rest'\n    if username_input:",
         "detail": "addons.turn-rest.app",
         "documentation": {}
     },
@@ -2985,43 +2985,7 @@
         "kind": 5,
         "importPath": "addons.turn-rest.app",
         "description": "addons.turn-rest.app",
-        "peekOfCode": "turn_tls_default = os.environ.get('TURN_TLS', 'false')\n# Support for multiple STUN servers (comma-separated)\nstun_hosts = os.environ.get('STUN_HOSTS', '').split(',') if os.environ.get('STUN_HOSTS') else []\nstun_hosts = [h.strip().lower() for h in stun_hosts if h.strip()]\n# Support for multiple TURN servers (comma-separated)\nturn_hosts = os.environ.get('TURN_HOSTS', '').split(',') if os.environ.get('TURN_HOSTS') else []\nturn_hosts = [h.strip().lower() for h in turn_hosts if h.strip()]\napp = Flask(__name__)\n@app.route('/', methods=['GET','POST'])\ndef turn_rest():",
-        "detail": "addons.turn-rest.app",
-        "documentation": {}
-    },
-    {
-        "label": "stun_hosts",
-        "kind": 5,
-        "importPath": "addons.turn-rest.app",
-        "description": "addons.turn-rest.app",
-        "peekOfCode": "stun_hosts = os.environ.get('STUN_HOSTS', '').split(',') if os.environ.get('STUN_HOSTS') else []\nstun_hosts = [h.strip().lower() for h in stun_hosts if h.strip()]\n# Support for multiple TURN servers (comma-separated)\nturn_hosts = os.environ.get('TURN_HOSTS', '').split(',') if os.environ.get('TURN_HOSTS') else []\nturn_hosts = [h.strip().lower() for h in turn_hosts if h.strip()]\napp = Flask(__name__)\n@app.route('/', methods=['GET','POST'])\ndef turn_rest():\n    service_input = request.values.get('service') or 'turn'\n    if service_input:",
-        "detail": "addons.turn-rest.app",
-        "documentation": {}
-    },
-    {
-        "label": "stun_hosts",
-        "kind": 5,
-        "importPath": "addons.turn-rest.app",
-        "description": "addons.turn-rest.app",
-        "peekOfCode": "stun_hosts = [h.strip().lower() for h in stun_hosts if h.strip()]\n# Support for multiple TURN servers (comma-separated)\nturn_hosts = os.environ.get('TURN_HOSTS', '').split(',') if os.environ.get('TURN_HOSTS') else []\nturn_hosts = [h.strip().lower() for h in turn_hosts if h.strip()]\napp = Flask(__name__)\n@app.route('/', methods=['GET','POST'])\ndef turn_rest():\n    service_input = request.values.get('service') or 'turn'\n    if service_input:\n        service_input = service_input.lower()",
-        "detail": "addons.turn-rest.app",
-        "documentation": {}
-    },
-    {
-        "label": "turn_hosts",
-        "kind": 5,
-        "importPath": "addons.turn-rest.app",
-        "description": "addons.turn-rest.app",
-        "peekOfCode": "turn_hosts = os.environ.get('TURN_HOSTS', '').split(',') if os.environ.get('TURN_HOSTS') else []\nturn_hosts = [h.strip().lower() for h in turn_hosts if h.strip()]\napp = Flask(__name__)\n@app.route('/', methods=['GET','POST'])\ndef turn_rest():\n    service_input = request.values.get('service') or 'turn'\n    if service_input:\n        service_input = service_input.lower()\n    username_input = request.values.get('username') or request.headers.get('x-auth-user') or request.headers.get('x-turn-username') or 'turn-rest'\n    if username_input:",
-        "detail": "addons.turn-rest.app",
-        "documentation": {}
-    },
-    {
-        "label": "turn_hosts",
-        "kind": 5,
-        "importPath": "addons.turn-rest.app",
-        "description": "addons.turn-rest.app",
-        "peekOfCode": "turn_hosts = [h.strip().lower() for h in turn_hosts if h.strip()]\napp = Flask(__name__)\n@app.route('/', methods=['GET','POST'])\ndef turn_rest():\n    service_input = request.values.get('service') or 'turn'\n    if service_input:\n        service_input = service_input.lower()\n    username_input = request.values.get('username') or request.headers.get('x-auth-user') or request.headers.get('x-turn-username') or 'turn-rest'\n    if username_input:\n        username_input = username_input.lower()",
+        "peekOfCode": "turn_tls_default = os.environ.get('TURN_TLS', 'false')\napp = Flask(__name__)\n@app.route('/', methods=['GET','POST'])\ndef turn_rest():\n    service_input = request.values.get('service') or 'turn'\n    if service_input:\n        service_input = service_input.lower()\n    username_input = request.values.get('username') or request.headers.get('x-auth-user') or request.headers.get('x-turn-username') or 'turn-rest'\n    if username_input:\n        username_input = username_input.lower()",
         "detail": "addons.turn-rest.app",
         "documentation": {}
     },

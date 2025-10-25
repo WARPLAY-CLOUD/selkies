@@ -32,7 +32,3 @@ Description: Joystick device interposer for Selkies project
 EOF
 
 dpkg-deb --build ${PKG_DIR}
-
-# Создать tar.gz для удобства
-tar -czvf /opt/${PKG_NAME}_${PKG_VERSION}.tar.gz selkies_joystick_interposer*.so 2>/dev/null || \
-    echo "Warning: Failed to create tar.gz archive"
