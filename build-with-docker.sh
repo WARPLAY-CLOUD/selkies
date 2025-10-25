@@ -14,7 +14,7 @@ echo -e "${GREEN}========================================${NC}"
 echo ""
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
-VERSION="1.0.0"
+VERSION="1.6.2w"
 
 echo -e "${BLUE}Configuration:${NC}"
 echo "  Repository: ${REPO_ROOT}"
@@ -74,7 +74,7 @@ if [ -f "addons/js-interposer/Dockerfile.debpkg" ]; then
     if docker build \
         --build-arg DISTRIB_RELEASE="24.04" \
         --build-arg PKG_NAME="selkies-js-interposer" \
-        --build-arg PKG_VERSION="1.0.0" \
+        --build-arg PKG_VERSION="1.6.2w" \
         --build-arg DEBFULLNAME="Build User" \
         --build-arg DEBEMAIL="build@localhost" \
         -f addons/js-interposer/Dockerfile.debpkg \

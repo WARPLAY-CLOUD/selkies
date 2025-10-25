@@ -63,7 +63,7 @@ docker run --rm `
     -w /workspace/addons/gst-web `
     ubuntu:$UbuntuVersion bash -c @"
         apt-get update && apt-get install -y tar gzip && \
-        tar -czf /workspace/dist/selkies-gstreamer-web_v1.0.0.tar.gz src/ && \
+        tar -czf /workspace/dist/selkies-gstreamer-web_v1.6.2w.tar.gz src/ && \
         echo 'Web interface archive created'
 "@
 
@@ -72,8 +72,8 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-if (Test-Path (Join-Path $DistDir "selkies-gstreamer-web_v1.0.0.tar.gz")) {
-    Write-Host "✓ Web interface: selkies-gstreamer-web_v1.0.0.tar.gz" -ForegroundColor Green
+if (Test-Path (Join-Path $DistDir "selkies-gstreamer-web_v1.6.2w.tar.gz")) {
+    Write-Host "✓ Web interface: selkies-gstreamer-web_v1.6.2w.tar.gz" -ForegroundColor Green
 } else {
     Write-Host "✗ Web archive not found" -ForegroundColor Red
     exit 1
@@ -89,7 +89,7 @@ if (-not $SkipJSInterposer) {
     if (Test-Path $jsDockerfile) {
         docker build `
             --build-arg DISTRIB_RELEASE=$UbuntuVersion `
-            --build-arg PKG_VERSION="1.0.0" `
+            --build-arg PKG_VERSION="1.6.2w" `
             -t selkies-js-interposer:local `
             -f $jsDockerfile `
             (Join-Path $PSScriptRoot "addons\js-interposer")
@@ -140,7 +140,7 @@ if (-not $SkipGStreamer) {
             # Извлечь tarball
             $containerId = docker create selkies-gstreamer:local
             $arch = "amd64"  # Можно определить динамически
-            $gstTarball = "gstreamer-selkies_gpl_v1.0.0_ubuntu${UbuntuVersion}_${arch}.tar.gz"
+            $gstTarball = "gstreamer-selkies_gpl_v1.6.2w_ubuntu${UbuntuVersion}_${arch}.tar.gz"
             
             docker cp "${containerId}:/opt/selkies-latest.tar.gz" (Join-Path $DistDir $gstTarball)
             docker rm $containerId | Out-Null

@@ -46,7 +46,7 @@ services:
         DISTRIB_IMAGE: ubuntu
         DISTRIB_RELEASE: "24.04"
         PKG_NAME: "selkies-js-interposer"
-        PKG_VERSION: "1.0.0"
+        PKG_VERSION: "1.6.2w"
         DEBFULLNAME: "Build User"
         DEBEMAIL: "build@localhost"
     image: selkies-js-interposer:local
