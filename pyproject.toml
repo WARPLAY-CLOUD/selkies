@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "selkies-gstreamer"
-version = "1.6.2w"
+version = "1.6.2+w"
 authors = [
     {name = "Dan Isla", email = "danisla@users.noreply.github.com"},
     {name = "Seungmin Kim", email = "8457324+ehfd@users.noreply.github.com"},
