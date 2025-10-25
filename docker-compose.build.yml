@@ -1,0 +1,71 @@
+version: "3.8"
+
+# Docker Compose для сборки всех компонентов Selkies
+# Использование: docker-compose -f docker-compose.build.yml build
+
+services:
+  # 1. GStreamer bundle
+  gstreamer:
+    build:
+      context: ./addons/gstreamer
+      dockerfile: Dockerfile
+      args:
+        DISTRIB_IMAGE: ubuntu
+        DISTRIB_RELEASE: "22.04" # или 20.04, 24.04
+        GSTREAMER_VERSION: "1.24.12"
+    image: selkies-gstreamer:local
+    container_name: selkies-gstreamer-builder
+    command: "true" # Не запускать, только собрать
+
+  # 2. Python wheel
+  py-build:
+    build:
+      context: .
+      dockerfile: Dockerfile.py-build
+    image: selkies-py-build:local
+    container_name: selkies-py-builder
+    volumes:
+      - ./dist:/opt/dist
+    command: "true"
+
+  # 3. Web interface
+  gst-web:
+    build:
+      context: ./addons/gst-web
+      dockerfile: Dockerfile
+    image: selkies-gst-web:local
+    container_name: selkies-web-builder
+    command: "true"
+
+  # 4. JS Interposer
+  js-interposer:
+    build:
+      context: ./addons/js-interposer
+      dockerfile: Dockerfile.debpkg
+      args:
+        DISTRIB_IMAGE: ubuntu
+        DISTRIB_RELEASE: "22.04"
+        PKG_NAME: "selkies-js-interposer"
+        PKG_VERSION: "1.0.0"
+        DEBFULLNAME: "Build User"
+        DEBEMAIL: "build@localhost"
+    image: selkies-js-interposer:local
+    container_name: selkies-js-builder
+    command: "true"
+
+  # Извлечение артефактов из всех образов
+  extract:
+    image: ubuntu:22.04
+    container_name: selkies-extract
+    volumes:
+      - ./dist:/dist
+    depends_on:
+      - gstreamer
+      - py-build
+      - gst-web
+      - js-interposer
+    command: >
+      bash -c "
+        echo 'Artifacts extracted to ./dist/';
+        ls -lh /dist/ || echo 'No artifacts found'
+      "

@@ -1,0 +1,29 @@
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at https://mozilla.org/MPL/2.0/.
+
+FROM python:3.11-slim
+
+ARG DEBIAN_FRONTEND=noninteractive
+ARG PIP_BREAK_SYSTEM_PACKAGES=1
+
+# Установить зависимости для сборки
+RUN pip install --no-cache-dir --upgrade build wheel setuptools
+
+WORKDIR /workspace
+
+# Копировать исходники
+COPY pyproject.toml setup.py README.md LICENSE ./
+COPY src/ ./src/
+
+# Собрать wheel
+RUN python -m build --wheel --outdir /opt/dist
+
+# Проверить результат
+RUN ls -lh /opt/dist/*.whl
+
+# Артефакты в /opt/dist/
+VOLUME ["/opt/dist"]
+
+CMD ["sh", "-c", "cp -v /opt/dist/*.whl /dist/ 2>/dev/null || echo 'Mount /dist volume to extract artifacts'"]
+

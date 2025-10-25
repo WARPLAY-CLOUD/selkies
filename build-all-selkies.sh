@@ -62,7 +62,8 @@ if ! python3 -m build --wheel 2>&1 | tee /tmp/build-wheel.log; then
     }
 fi
 
-WHL_FILE=$(ls -t dist/selkies_gstreamer-*.whl 2>/dev/null | head -n1)
+# Ищем любой .whl файл (включая selkies-0.0.0)
+WHL_FILE=$(ls -t dist/*.whl 2>/dev/null | head -n1)
 if [ -n "${WHL_FILE}" ]; then
     WHL_SIZE=$(du -h "${WHL_FILE}" | cut -f1)
     echo -e "${GREEN}✓ Python wheel built successfully${NC}"
