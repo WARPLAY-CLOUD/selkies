@@ -24,21 +24,53 @@ echo ""
 mkdir -p dist
 
 # ========================================
-# 1. Python wheel - через Docker
+# 1. Python wheel - через Docker (legacy ветка)
 # ========================================
-echo -e "${GREEN}[1/4] Building Python wheel in Docker...${NC}"
+echo -e "${GREEN}[1/4] Building Python wheel in Docker (legacy version)...${NC}"
+echo -e "${BLUE}Используем структуру из ветки legacy${NC}"
+
+# Проверяем, что legacy ветка существует
+if ! git show-ref --verify --quiet refs/remotes/origin/legacy; then
+    echo -e "${RED}✗ Ветка origin/legacy не найдена!${NC}"
+    exit 1
+fi
+
+# Создаём временную директорию для legacy сборки
+TEMP_BUILD_DIR="/tmp/selkies-legacy-build-$$"
+mkdir -p "${TEMP_BUILD_DIR}"
+
+# Экспортируем файлы из legacy ветки
+echo "  Экспорт файлов из ветки legacy..."
+git archive origin/legacy src/ README.md pyproject.toml | tar -x -C "${TEMP_BUILD_DIR}"
+
+# Собираем wheel из legacy версии
 docker run --rm \
-    -v "${REPO_ROOT}:/workspace" \
+    -v "${TEMP_BUILD_DIR}:/workspace" \
     -w /workspace \
     python:3.11 bash -c "
         pip install --no-cache-dir build wheel setuptools && \
+        sed -i 's/version = \"0.0.0\"/version = \"${VERSION}\"/g' pyproject.toml && \
         python -m build --wheel && \
         echo 'Python wheel built successfully'
     "
 
+# Копируем собранный wheel в dist/
+cp "${TEMP_BUILD_DIR}"/dist/*.whl "${REPO_ROOT}/dist/" 2>/dev/null || true
+
+# Очистка
+rm -rf "${TEMP_BUILD_DIR}"
+
 WHL_FILE=$(ls -t dist/*.whl 2>/dev/null | head -n1)
 if [ -n "${WHL_FILE}" ]; then
     echo -e "${GREEN}✓ Python wheel: $(basename ${WHL_FILE})${NC}"
+    
+    # Показываем структуру пакета
+    echo "  Проверка структуры пакета..."
+    if python3 -m zipfile -l "${WHL_FILE}" | grep -q "selkies_gstreamer/gstwebrtc_app.py"; then
+        echo -e "${GREEN}  ✓ Правильная legacy структура (файлы в корне)${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Структура отличается от ожидаемой${NC}"
+    fi
 else
     echo -e "${RED}✗ Failed to build Python wheel${NC}"
     exit 1
@@ -160,12 +192,14 @@ echo "Status: ${REQUIRED_COUNT}/2 required artifacts built"
 echo ""
 
 if [ ${REQUIRED_COUNT} -eq 2 ]; then
-    echo -e "${GREEN}✓ Minimum artifacts ready for docker-selkies-egl-desktop!${NC}"
+    echo -e "${GREEN}✓ Minimum artifacts ready!${NC}"
     echo ""
-    echo "Next steps:"
-    echo "  cd ../docker-selkies-egl-desktop"
-    echo "  # Update Dockerfile to use these artifacts"
-    echo "  docker build -t selkies-ice:latest ."
+    echo "Проверка wheel пакета:"
+    echo "  python3 -m zipfile -l ${WHL_FILE} | head -20"
+    echo ""
+    echo "Сравнение с эталоном:"
+    echo "  Эталон: ATTACHMENTS/selkies_gstreamer-1.6.2def-py3-none-any/"
+    echo "  Собран: ${WHL_FILE}"
 elif [ ${REQUIRED_COUNT} -eq 1 ]; then
     echo -e "${YELLOW}⚠ Only 1/2 required artifacts built${NC}"
     echo "  Check errors above"
