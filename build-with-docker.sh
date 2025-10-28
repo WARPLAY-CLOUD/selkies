@@ -84,12 +84,25 @@ docker run --rm \
     -v "${REPO_ROOT}:/workspace" \
     -w /workspace/addons/gst-web \
     ubuntu:24.04 bash -c "
-        tar -czf /workspace/dist/selkies-gstreamer-web_v${VERSION}.tar.gz src/ && \
+        mkdir -p /tmp/gst-web && \
+        cp -r src/* /tmp/gst-web/ && \
+        cd /tmp && \
+        tar -czf /workspace/dist/selkies-gstreamer-web_v${VERSION}.tar.gz gst-web/ && \
         echo 'Web interface archive created'
     "
 
 if [ -f "dist/selkies-gstreamer-web_v${VERSION}.tar.gz" ]; then
     echo -e "${GREEN}✓ Web interface: selkies-gstreamer-web_v${VERSION}.tar.gz${NC}"
+    
+    # Проверяем структуру архива
+    echo "  Проверка структуры архива..."
+    if tar -tzf "dist/selkies-gstreamer-web_v${VERSION}.tar.gz" | grep -q "gst-web/index.html"; then
+        echo -e "${GREEN}  ✓ Правильная структура (gst-web/index.html найден)${NC}"
+    else
+        echo -e "${YELLOW}  ⚠ Структура может отличаться${NC}"
+        echo "  Содержимое архива:"
+        tar -tzf "dist/selkies-gstreamer-web_v${VERSION}.tar.gz" | head -10
+    fi
 else
     echo -e "${RED}✗ Failed to create web archive${NC}"
     exit 1
