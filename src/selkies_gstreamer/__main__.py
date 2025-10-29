@@ -512,7 +512,8 @@ async def main():
                         help='Port to start the Prometheus metrics server on')
     parser.add_argument('--debug', action='store_true',
                         help='Enable debug logging')
-    args, unknown = parser.parse_known_args()
+    args = parser.parse_args()
+
     if os.path.exists(args.json_config):
         # Read and overlay arguments from json file
         # Note that these are explicit overrides only.
@@ -972,5 +973,8 @@ async def main():
         await server.stop()
         sys.exit(0)
 
-def wr_entrypoint():
+def entrypoint():
     asyncio.run(main())
+
+if __name__ == '__main__':
+    entrypoint()
