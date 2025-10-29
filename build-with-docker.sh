@@ -24,41 +24,17 @@ echo ""
 mkdir -p dist
 
 # ========================================
-# 1. Python wheel - через Docker (legacy ветка)
+# 1. Python wheel - через Docker
 # ========================================
-echo -e "${GREEN}[1/4] Building Python wheel in Docker (legacy version)...${NC}"
-echo -e "${BLUE}Используем структуру из ветки legacy${NC}"
-
-# Проверяем, что legacy ветка существует
-if ! git show-ref --verify --quiet refs/remotes/origin/legacy; then
-    echo -e "${RED}✗ Ветка origin/legacy не найдена!${NC}"
-    exit 1
-fi
-
-# Создаём временную директорию для legacy сборки
-TEMP_BUILD_DIR="/tmp/selkies-legacy-build-$$"
-mkdir -p "${TEMP_BUILD_DIR}"
-
-# Экспортируем файлы из legacy ветки
-echo "  Экспорт файлов из ветки legacy..."
-git archive origin/legacy src/ README.md pyproject.toml | tar -x -C "${TEMP_BUILD_DIR}"
-
-# Собираем wheel из legacy версии
+echo -e "${GREEN}[1/4] Building Python wheel in Docker...${NC}"
 docker run --rm \
-    -v "${TEMP_BUILD_DIR}:/workspace" \
+    -v "${REPO_ROOT}:/workspace" \
     -w /workspace \
     python:3.11 bash -c "
         pip install --no-cache-dir build wheel setuptools && \
-        sed -i 's/version = \"0.0.0\"/version = \"${VERSION}\"/g' pyproject.toml && \
         python -m build --wheel && \
         echo 'Python wheel built successfully'
     "
-
-# Копируем собранный wheel в dist/
-cp "${TEMP_BUILD_DIR}"/dist/*.whl "${REPO_ROOT}/dist/" 2>/dev/null || true
-
-# Очистка
-rm -rf "${TEMP_BUILD_DIR}"
 
 WHL_FILE=$(ls -t dist/*.whl 2>/dev/null | head -n1)
 if [ -n "${WHL_FILE}" ]; then

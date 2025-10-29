@@ -254,7 +254,7 @@ RUN apt-get update && apt-get install --no-install-recommends -y /opt/selkies-js
     apt-get clean && rm -rf /var/lib/apt/lists/* /var/cache/debconf/* /var/log/* /tmp/* /var/tmp/*
 
 # Install Selkies Python application
-ARG PYPI_PACKAGE=selkies
+ARG PYPI_PACKAGE=selkies-gstreamer
 ARG PACKAGE_VERSION=0.0.0.dev0
 ARG PIP_BREAK_SYSTEM_PACKAGES=1
 COPY --chown=1000:1000 --from=selkies-build /opt/pypi/dist/${PYPI_PACKAGE}-${PACKAGE_VERSION}-py3-none-any.whl .
