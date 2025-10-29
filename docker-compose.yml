@@ -72,9 +72,9 @@ services:
       - "8080:8080"
     volumes:
       - type: bind
-        source: ./src/selkies_gstreamer
+        source: ./src/selkies
         # Change Python version to system version
-        target: /usr/local/lib/python3.12/dist-packages/selkies_gstreamer
+        target: /usr/local/lib/python3.12/dist-packages/selkies
         read_only: true
 
     # Configure for interactive session
