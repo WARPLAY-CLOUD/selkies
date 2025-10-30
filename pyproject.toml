@@ -58,8 +58,8 @@ Homepage = "https://github.com/selkies-project/selkies-gstreamer"
 [project.scripts]
 selkies-gstreamer = "selkies_gstreamer.__main__:entrypoint"
 selkies = "selkies_gstreamer.__main__:entrypoint"
-# FIXME
-# selkies-resize = "selkies_gstreamer.resize:entrypoint"
+selkies-gstreamer-resize = "selkies_gstreamer.resize:entrypoint"
+selkies-resize = "selkies_gstreamer.resize:entrypoint"
 
 [tool.setuptools.packages.find]
 where = ["src"]
