@@ -56,8 +56,8 @@ Homepage = "https://github.com/selkies-project/selkies-gstreamer"
 "Bug Tracker" = "https://github.com/selkies-project/selkies-gstreamer/issues"
 
 [project.scripts]
-selkies-gstreamer = "selkies_gstreamer.__main__:main"
-selkies = "selkies_gstreamer.__main__:main"
+selkies-gstreamer = "selkies_gstreamer.__main__:entrypoint"
+selkies = "selkies_gstreamer.__main__:entrypoint"
 # FIXME
 # selkies-resize = "selkies_gstreamer.resize:entrypoint"
 
