@@ -2,6 +2,15 @@
 # This Source Code Form is subject to the terms of the Mozilla Public
 # License, v. 2.0. If a copy of the MPL was not distributed with this
 # file, You can obtain one at https://mozilla.org/MPL/2.0/.
+#
+# Скрипт сборки Selkies-GStreamer
+#
+# Использование:
+#   ./build.sh                                    # Собрать всё (с возможностью пропустить GStreamer)
+#   BUILD_GSTREAMER=false ./build.sh              # Пропустить GStreamer полностью
+#   BUILD_JS_INTERPOSER=false ./build.sh          # Пропустить JS Interposer
+#   SELKIES_VERSION=1.7.0 ./build.sh              # Задать свою версию
+#   DISTRIB_RELEASE=22.04 ./build.sh              # Для Ubuntu 22.04
 
 set -e
 
@@ -23,8 +32,8 @@ ARCH="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
 # Параметры сборки
 BUILD_PYTHON=${BUILD_PYTHON:-true}
 BUILD_WEB=${BUILD_WEB:-true}
-BUILD_JS_INTERPOSER=${BUILD_JS_INTERPOSER:-false}
-BUILD_GSTREAMER=${BUILD_GSTREAMER:-false}
+BUILD_JS_INTERPOSER=${BUILD_JS_INTERPOSER:-true}
+BUILD_GSTREAMER=${BUILD_GSTREAMER:-true}
 
 # Проверка на root (для Linux не обязательно, но желательно иметь доступ к docker)
 if ! docker ps >/dev/null 2>&1; then
@@ -45,11 +54,15 @@ echo "  Дистрибутив: ${DISTRIB_IMAGE} ${DISTRIB_RELEASE}"
 echo "  Архитектура: ${ARCH}"
 echo ""
 echo -e "${BLUE}Что будет собрано:${NC}"
-echo "  [$([ "$BUILD_PYTHON" = "true" ] && echo "x" || echo " ")] Python wheel"
-echo "  [$([ "$BUILD_WEB" = "true" ] && echo "x" || echo " ")] Web интерфейс"
-echo "  [$([ "$BUILD_JS_INTERPOSER" = "true" ] && echo "x" || echo " ")] JS Interposer (DEB)"
-echo "  [$([ "$BUILD_GSTREAMER" = "true" ] && echo "x" || echo " ")] GStreamer bundle (займет 30-60 мин!)"
+echo "  [$([ "$BUILD_PYTHON" = "true" ] && echo "x" || echo " ")] Python wheel (обязательный)"
+echo "  [$([ "$BUILD_WEB" = "true" ] && echo "x" || echo " ")] Web интерфейс (обязательный)"
+echo "  [$([ "$BUILD_JS_INTERPOSER" = "true" ] && echo "x" || echo " ")] JS Interposer (опционально, ~30 сек)"
+echo "  [$([ "$BUILD_GSTREAMER" = "true" ] && echo "x" || echo " ")] GStreamer bundle (опционально, ~45 мин, можно пропустить)"
 echo ""
+if [ "$BUILD_GSTREAMER" = "true" ]; then
+    echo -e "${CYAN}Подсказка: Для GStreamer будет 10-секундная пауза для отмены${NC}"
+    echo ""
+fi
 
 # Создать директорию dist
 mkdir -p "${REPO_ROOT}/dist"
@@ -180,6 +193,9 @@ if [ "$BUILD_JS_INTERPOSER" = "true" ]; then
         fi
     fi
     echo ""
+else
+    echo -e "${BLUE}[3/4] JS Interposer пропущен (отключен)${NC}"
+    echo ""
 fi
 
 # ========================================
@@ -188,9 +204,32 @@ fi
 if [ "$BUILD_GSTREAMER" = "true" ]; then
     echo -e "${GREEN}[4/4] Сборка GStreamer bundle...${NC}"
     echo -e "${YELLOW}  ⚠ ВНИМАНИЕ: Это займет 30-60 минут!${NC}"
-    echo -e "${YELLOW}  ⚠ Нажмите Ctrl+C в течение 5 секунд, чтобы отменить...${NC}"
-    sleep 5
+    echo -e "${YELLOW}  ⚠ Нажмите Ctrl+C в течение 10 секунд, чтобы пропустить...${NC}"
     
+    # Обработка Ctrl+C для пропуска GStreamer
+    SKIP_GSTREAMER=false
+    trap 'SKIP_GSTREAMER=true' INT
+    
+    for i in {10..1}; do
+        if [ "$SKIP_GSTREAMER" = "true" ]; then
+            break
+        fi
+        echo -ne "  ${i}...\r"
+        sleep 1
+    done
+    
+    # Восстановить обработчик Ctrl+C
+    trap - INT
+    
+    if [ "$SKIP_GSTREAMER" = "true" ]; then
+        echo -e "  ${YELLOW}⚠ Сборка GStreamer пропущена${NC}                    "
+        BUILD_GSTREAMER=false
+    else
+        echo -e "  ${GREEN}Запускаем сборку GStreamer...${NC}                    "
+    fi
+fi
+
+if [ "$BUILD_GSTREAMER" = "true" ]; then
     echo -e "${CYAN}  → Сборка для ${DISTRIB_IMAGE}:${DISTRIB_RELEASE}${NC}"
     
     if [ ! -f "${REPO_ROOT}/addons/gstreamer/Dockerfile" ]; then
@@ -233,6 +272,11 @@ if [ "$BUILD_GSTREAMER" = "true" ]; then
         exit 1
     fi
     echo ""
+else
+    if [ -z "$SKIP_GSTREAMER" ] || [ "$SKIP_GSTREAMER" != "true" ]; then
+        echo -e "${BLUE}[4/4] GStreamer bundle пропущен (отключен)${NC}"
+        echo ""
+    fi
 fi
 
 # ========================================
