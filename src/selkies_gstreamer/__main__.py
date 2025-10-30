@@ -596,9 +596,9 @@ async def main():
     signalling.on_disconnect = lambda: app.stop_pipeline()
     audio_signalling.on_disconnect = lambda: audio_app.stop_pipeline()
 
-    # After connecting, attempt to setup call to peer
-    signalling.on_connect = signalling.setup_call
-    audio_signalling.on_connect = audio_signalling.setup_call
+    # After connecting, wait for peer to call (server doesn't initiate)
+    # signalling.on_connect = signalling.setup_call
+    # audio_signalling.on_connect = audio_signalling.setup_call
 
     # [START main_setup]
     # Fetch the TURN server and credentials
