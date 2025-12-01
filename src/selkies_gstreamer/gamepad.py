@@ -268,41 +268,69 @@ class SelkiesGamepad:
 
         closed_clients = []
         loop = asyncio.get_event_loop()
-        for fd in self.clients:
+        # Create a copy of client list to avoid modification during iteration
+        client_fds = list(self.clients.keys())
+        for fd in client_fds:
             try:
-                client = self.clients[fd]
+                client = self.clients.get(fd)
+                if client is None:
+                    # Client was already removed
+                    continue
                 logger.debug("Sending event to client with fd: %d" % fd)
                 # Use sock_sendall for non-blocking sockets
                 await loop.sock_sendall(client, event)
             except (BrokenPipeError, ConnectionResetError, OSError) as e:
-                logger.info("Client %d disconnected: %s" % (fd, e))
+                logger.info("Client %d disconnected during event send: %s" % (fd, e))
                 closed_clients.append(fd)
                 try:
-                    client.close()
+                    if client:
+                        client.close()
+                except:
+                    pass
+            except Exception as e:
+                logger.error("Unexpected error sending event to client %d: %s" % (fd, e), exc_info=True)
+                # Mark client for removal on unexpected errors
+                closed_clients.append(fd)
+                try:
+                    if client:
+                        client.close()
                 except:
                     pass
 
+        # Safely remove closed clients
         for fd in closed_clients:
-            del self.clients[fd]
+            try:
+                if fd in self.clients:
+                    del self.clients[fd]
+            except:
+                pass
 
     async def setup_client(self, client):
-        fd = client.fileno()
-        logger.info("Setting up client with fd: %d" % fd)
-        
-        # If config is not ready yet, client is already in self.clients dict
-        # and will receive config when set_config is called
-        if not self.config:
-            logger.info("Config not ready yet, client %d will receive config when available" % fd)
-            return
-        
-        await self.__send_config_to_client(client)
+        try:
+            fd = client.fileno()
+            logger.info("Setting up client with fd: %d" % fd)
+            
+            # If config is not ready yet, client is already in self.clients dict
+            # and will receive config when set_config is called
+            if not self.config:
+                logger.info("Config not ready yet, client %d will receive config when available" % fd)
+                return
+            
+            await self.__send_config_to_client(client)
+        except Exception as e:
+            logger.error("Error in setup_client (fd: %d): %s" % (
+                client.fileno() if client else None, e), exc_info=True)
+            # Re-raise to let caller handle cleanup
+            raise
 
     async def __send_config_to_client(self, client):
         """Send configuration to a connected client"""
-        logger.info("Sending config to client with fd: %d" % client.fileno())
         try:
+            fd = client.fileno()
+            logger.info("Sending config to client with fd: %d" % fd)
             config_data = self.__make_config()
             if not config_data:
+                logger.warning("No config data available for client %d" % fd)
                 return
             # Use sock_sendall for non-blocking sockets
             loop = asyncio.get_event_loop()
@@ -314,7 +342,6 @@ class SelkiesGamepad:
                     self.send_btn(btn_num, 0)
                 for axis_num in range(len(self.config["axes_map"])):
                     self.send_axis(axis_num, 0)
-
         except (BrokenPipeError, ConnectionResetError, OSError) as e:
             fd = client.fileno()
             if fd in self.clients:
@@ -323,7 +350,19 @@ class SelkiesGamepad:
                 client.close()
             except:
                 pass
-            logger.info("Client disconnected: %s" % e)
+            logger.info("Client disconnected during config send: %s" % e)
+        except Exception as e:
+            logger.error("Unexpected error sending config to client (fd: %d): %s" % (
+                client.fileno() if client else None, e), exc_info=True)
+            # Clean up client on unexpected error
+            try:
+                fd = client.fileno()
+                if fd in self.clients:
+                    del self.clients[fd]
+                client.close()
+            except:
+                pass
+            raise
 
     def _create_socket(self):
         """Synchronously create and bind socket so it's ready for connections"""
@@ -358,18 +397,37 @@ class SelkiesGamepad:
                         asyncio.get_event_loop().sock_accept(self.server), timeout=1)
                 except asyncio.TimeoutError:
                     continue
+                except Exception as e:
+                    logger.error("Error accepting client connection: %s" % e, exc_info=True)
+                    continue
 
-                fd = client.fileno()
-                logger.info("Client connected with fd: %d" % fd)
+                # Handle client connection with error handling to prevent server crash
+                try:
+                    fd = client.fileno()
+                    logger.info("Client connected with fd: %d" % fd)
 
-                # Set client socket to non-blocking mode for async operations
-                client.setblocking(False)
+                    # Set client socket to non-blocking mode for async operations
+                    client.setblocking(False)
 
-                # Add client to dictionary first (setup_client may need it)
-                self.clients[fd] = client
+                    # Add client to dictionary first (setup_client may need it)
+                    self.clients[fd] = client
 
-                # Send client the joystick configuration
-                await self.setup_client(client)
+                    # Send client the joystick configuration
+                    await self.setup_client(client)
+                except Exception as e:
+                    logger.error("Error handling client connection (fd: %d): %s" % (
+                        client.fileno() if client else None, e), exc_info=True)
+                    # Clean up failed client
+                    try:
+                        if client:
+                            fd = client.fileno()
+                            if fd in self.clients:
+                                del self.clients[fd]
+                            client.close()
+                    except:
+                        pass
+                    # Continue serving other clients
+                    continue
         finally:
             if self.server:
                 self.server.close()
