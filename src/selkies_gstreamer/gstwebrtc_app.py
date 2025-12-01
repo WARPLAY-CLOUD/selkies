@@ -1735,6 +1735,8 @@ class GSTWebRTCApp:
         asyncio.run(self.on_ice(mlineindex, candidate))
 
     def bus_call(self, message):
+        if message is None:
+            return True
         t = message.type
         if t == Gst.MessageType.EOS:
             logger.error("End-of-stream\n")
@@ -1803,6 +1805,8 @@ class GSTWebRTCApp:
             if bus is not None:
                 while await asyncio.to_thread(bus.have_pending):
                     msg = bus.pop()
+                    if msg is None:
+                        break
                     if not await asyncio.to_thread(self.bus_call, msg):
                         running = False
             await asyncio.sleep(0.1)

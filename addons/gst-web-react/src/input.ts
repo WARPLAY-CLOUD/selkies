@@ -28,100 +28,6 @@ interface WindowMath {
 
 type Listener = [EventTarget, string, EventListener];
 
-/**
- * Упрощенная клавиатура для обработки клавиш
- * В будущем можно заменить на Guacamole.Keyboard
- */
-class SimpleKeyboard {
-  private element: Window | Document;
-  public onkeydown: ((keysym: number) => void) | null = null;
-  public onkeyup: ((keysym: number) => void) | null = null;
-  private listeners: Listener[] = [];
-
-  constructor(element: Window | Document) {
-    this.element = element;
-    this.setup();
-  }
-
-  private setup(): void {
-    const keydownHandler = (e: KeyboardEvent) => {
-      if (this.onkeydown) {
-        const keysym = this.getKeysym(e);
-        if (keysym !== null) {
-          this.onkeydown(keysym);
-        }
-      }
-    };
-
-    const keyupHandler = (e: KeyboardEvent) => {
-      if (this.onkeyup) {
-        const keysym = this.getKeysym(e);
-        if (keysym !== null) {
-          this.onkeyup(keysym);
-        }
-      }
-    };
-
-    this.element.addEventListener('keydown', keydownHandler as EventListener);
-    this.element.addEventListener('keyup', keyupHandler as EventListener);
-    this.listeners.push([this.element, 'keydown', keydownHandler as EventListener]);
-    this.listeners.push([this.element, 'keyup', keyupHandler as EventListener]);
-  }
-
-  private getKeysym(e: KeyboardEvent): number | null {
-    // Простая маппинг для основных клавиш
-    // В будущем можно использовать полную таблицу Guacamole
-    const keyMap: Record<string, number> = {
-      'Escape': 65307,
-      'Enter': 65293,
-      'Tab': 65289,
-      'Backspace': 65288,
-      'Delete': 65535,
-      'ArrowUp': 65362,
-      'ArrowDown': 65364,
-      'ArrowLeft': 65361,
-      'ArrowRight': 65363,
-      'Home': 65360,
-      'End': 65367,
-      'PageUp': 65365,
-      'PageDown': 65366,
-      'F1': 65470,
-      'F2': 65471,
-      'F3': 65472,
-      'F4': 65473,
-      'F5': 65474,
-      'F6': 65475,
-      'F7': 65476,
-      'F8': 65477,
-      'F9': 65478,
-      'F10': 65479,
-      'F11': 65480,
-      'F12': 65481,
-    };
-
-    if (keyMap[e.code]) {
-      return keyMap[e.code];
-    }
-
-    // Для обычных символов используем charCode
-    if (e.key.length === 1) {
-      return e.key.charCodeAt(0);
-    }
-
-    return null;
-  }
-
-  reset(): void {
-    // Сброс состояния клавиатуры
-  }
-
-  destroy(): void {
-    this.listeners.forEach(([target, event, handler]) => {
-      target.removeEventListener(event, handler);
-    });
-    this.listeners = [];
-  }
-}
 
 export class Input {
   public element: HTMLVideoElement;
@@ -129,7 +35,7 @@ export class Input {
   public mouseRelative: boolean = false;
   public m: WindowMath | null = null;
   private buttonMask: number = 0;
-  private keyboard: SimpleKeyboard | null = null;
+  private keyboard: Guacamole.Keyboard | null = null;
   private gamepadManager: GamepadManager | null = null;
   public x: number = 0;
   public y: number = 0;
@@ -639,8 +545,8 @@ export class Input {
       this.addListenerContext(this.element, 'mouseup', this.mouseButtonMovement);
     }
 
-    // Используем простую клавиатуру
-    this.keyboard = new SimpleKeyboard(window);
+    // Используем Guacamole.Keyboard для правильной обработки клавиш-модификаторов
+    this.keyboard = new Guacamole.Keyboard(window);
     this.keyboard.onkeydown = (keysym) => {
       this.send("kd," + keysym);
     };
@@ -675,7 +581,6 @@ export class Input {
       this.keyboard.onkeydown = null;
       this.keyboard.onkeyup = null;
       this.keyboard.reset();
-      this.keyboard.destroy();
       this.keyboard = null;
       this.send("kr");
     }

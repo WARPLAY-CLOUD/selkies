@@ -68,7 +68,7 @@ npm run build
 Откройте приложение с параметрами:
 
 ```
-http://localhost:3000/?server=209.250.236.147&port=8080&app=desktop&debug=true
+http://localhost:3001/?server=209.250.236.147&port=8080&app=desktop&debug=true
 ```
 
 **Доступные параметры:**
