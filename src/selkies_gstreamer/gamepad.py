@@ -271,7 +271,7 @@ class SelkiesGamepad:
             try:
                 client = self.clients[fd]
                 logger.debug("Sending event to client with fd: %d" % fd)
-                await asyncio.to_thread(socket.sendall, client, event)
+                await asyncio.to_thread(client.sendall, event)
             except BrokenPipeError:
                 logger.info("Client %d disconnected" % fd)
                 closed_clients.append(fd)
@@ -299,7 +299,7 @@ class SelkiesGamepad:
             config_data = self.__make_config()
             if not config_data:
                 return
-            await asyncio.to_thread(socket.sendall, client, config_data)
+            await asyncio.to_thread(client.sendall, config_data)
             await asyncio.sleep(0.5)
             # Send zero values for all buttons and axis.
             if self.config:
@@ -344,7 +344,8 @@ class SelkiesGamepad:
         try:
             while self.running:
                 try:
-                    client, _ = await asyncio.wait_for(socket.accept(self.server), timeout=1)
+                    client, _ = await asyncio.wait_for(
+                        asyncio.get_event_loop().sock_accept(self.server), timeout=1)
                 except asyncio.TimeoutError:
                     continue
 
