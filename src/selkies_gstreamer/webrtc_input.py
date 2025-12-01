@@ -137,6 +137,9 @@ class WebRTCInput:
             'unhandled on_cursor_change')
         self.on_client_webrtc_stats = lambda webrtc_stat_type, webrtc_stats: logger.warning(
             'unhandled on_client_webrtc_stats')
+        
+        # Pre-create socket servers for all 4 gamepads to allow interposer to connect early
+        self.__precreate_gamepad_sockets()
 
     def __keyboard_connect(self):
         self.keyboard = pynput.keyboard.Controller()
@@ -163,6 +166,25 @@ class WebRTCInput:
             self.uinput_mouse_socket.sendto(
                 data, self.uinput_mouse_socket_path)
 
+    def __precreate_gamepad_sockets(self):
+        """Pre-create socket servers for all 4 gamepads to allow interposer to connect early
+        Creates sockets synchronously so they're ready immediately.
+        """
+        if not self.js_socket_path_map:
+            return
+        
+        logger.info("Pre-creating gamepad socket servers")
+        for js_num in range(4):
+            socket_path = self.js_socket_path_map.get(js_num, None)
+            if socket_path is None:
+                continue
+            
+            # Create gamepad server and socket synchronously
+            js = SelkiesGamepad(socket_path)
+            js._create_socket()  # Create socket synchronously so it's ready immediately
+            self.js_map[js_num] = js
+            logger.info("Pre-created gamepad socket server for js%d at %s" % (js_num, socket_path))
+
     def __js_connect(self, js_num, name, num_btns, num_axes):
         """Connect virtual joystick using Selkies Joystick Interposer
         """
@@ -174,13 +196,20 @@ class WebRTCInput:
             logger.error("failed to connect js%d because socket_path was not found" % js_num)
             return
 
-        # Create the gamepad and button config.
-        js = SelkiesGamepad(socket_path)
+        # Check if server already exists (pre-created)
+        js = self.js_map.get(js_num, None)
+        if js is None:
+            # Create the gamepad and button config if not pre-created
+            js = SelkiesGamepad(socket_path)
+            asyncio.create_task(js.run_server())
+            self.js_map[js_num] = js
+        elif not js.running and js.server is not None:
+            # Server was pre-created but not started yet, start it now
+            asyncio.create_task(js.run_server())
+            logger.info("Starting pre-created gamepad server for js%d" % js_num)
+        
+        # Set config (this will send config to any connected clients)
         js.set_config(name, num_btns, num_axes)
-
-        asyncio.create_task(js.run_server())
-
-        self.js_map[js_num] = js
 
     async def __js_disconnect(self, js_num=None):
         if js_num is None:
@@ -226,6 +255,12 @@ class WebRTCInput:
         self.reset_keyboard()
 
         self.__mouse_connect()
+        
+        # Start gamepad servers that were pre-created (async servers need event loop)
+        for js_num, js in list(self.js_map.items()):
+            if js.server is not None and not js.running:
+                asyncio.create_task(js.run_server())
+                logger.info("Started gamepad server for js%d" % js_num)
 
     async def disconnect(self):
         await self.__js_disconnect()

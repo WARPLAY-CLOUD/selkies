@@ -201,6 +201,13 @@ class SelkiesGamepad:
         self.name = name
         self.config = detect_gamepad_config(name)
         self.mapper = GamepadMapper(self.config, name, num_btns, num_axes)
+        
+        # Send config to any clients that are already connected
+        if self.clients:
+            logger.info("Sending config to %d already connected clients" % len(self.clients))
+            for client in list(self.clients.values()):
+                # Create task to send config asynchronously
+                asyncio.create_task(self.__send_config_to_client(client))
 
     def __make_config(self):
         '''
@@ -274,6 +281,19 @@ class SelkiesGamepad:
             del self.clients[fd]
 
     async def setup_client(self, client):
+        fd = client.fileno()
+        logger.info("Setting up client with fd: %d" % fd)
+        
+        # If config is not ready yet, client is already in self.clients dict
+        # and will receive config when set_config is called
+        if not self.config:
+            logger.info("Config not ready yet, client %d will receive config when available" % fd)
+            return
+        
+        await self.__send_config_to_client(client)
+
+    async def __send_config_to_client(self, client):
+        """Send configuration to a connected client"""
         logger.info("Sending config to client with fd: %d" % client.fileno())
         try:
             config_data = self.__make_config()
@@ -282,16 +302,21 @@ class SelkiesGamepad:
             await asyncio.to_thread(socket.sendall, client, config_data)
             await asyncio.sleep(0.5)
             # Send zero values for all buttons and axis.
-            for btn_num in range(len(self.config["btn_map"])):
-                self.send_btn(btn_num, 0)
-            for axis_num in range(len(self.config["axes_map"])):
-                self.send_axis(axis_num, 0)
+            if self.config:
+                for btn_num in range(len(self.config["btn_map"])):
+                    self.send_btn(btn_num, 0)
+                for axis_num in range(len(self.config["axes_map"])):
+                    self.send_axis(axis_num, 0)
 
         except BrokenPipeError:
+            fd = client.fileno()
+            if fd in self.clients:
+                del self.clients[fd]
             client.close()
             logger.info("Client disconnected")
 
-    async def run_server(self):
+    def _create_socket(self):
+        """Synchronously create and bind socket so it's ready for connections"""
         try:
             os.unlink(self.socket_path)
         except OSError:
@@ -302,6 +327,13 @@ class SelkiesGamepad:
         self.server.bind(self.socket_path)
         self.server.listen(1)
         self.server.setblocking(False)
+
+        logger.info('Socket created and bound at %s' % self.socket_path)
+
+    async def run_server(self):
+        # Create socket if not already created
+        if self.server is None:
+            self._create_socket()
 
         logger.info('Listening for connections on %s' % self.socket_path)
 
@@ -319,13 +351,14 @@ class SelkiesGamepad:
                 fd = client.fileno()
                 logger.info("Client connected with fd: %d" % fd)
 
+                # Add client to dictionary first (setup_client may need it)
+                self.clients[fd] = client
+
                 # Send client the joystick configuration
                 await self.setup_client(client)
-
-                # Add client to dictionary to receive events.
-                self.clients[fd] = client
         finally:
-            self.server.close()
+            if self.server:
+                self.server.close()
             try:
                 os.unlink(self.socket_path)
             except:

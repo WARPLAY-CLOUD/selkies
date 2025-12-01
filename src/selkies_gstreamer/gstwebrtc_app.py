@@ -1743,6 +1743,21 @@ class GSTWebRTCApp:
             return False
         elif t == Gst.MessageType.ERROR:
             err, debug = message.parse_error()
+            err_str = str(err)
+            debug_str = str(debug) if debug else ""
+            # Filter out non-critical SCTP errors that spam logs
+            # These errors come from sctpassociation element and are non-critical
+            if (isinstance(message.src, Gst.Element) and 
+                hasattr(message.src, 'get_name') and 
+                message.src.get_name() and 
+                "sctp" in message.src.get_name().lower()):
+                # SCTP errors are often non-critical and happen during normal WebRTC operation
+                logger.debug("SCTP error (non-critical) from %s: %s" % (message.src.get_name(), err_str))
+                return True
+            if "SCTP_SEND_FAILED_EVENT" in err_str or "SCTP_SEND_FAILED" in err_str or "SCTP_SEND_FAILED" in debug_str:
+                # These are non-critical and happen during normal WebRTC operation
+                logger.debug("SCTP send failed (non-critical): %s" % err_str)
+                return True
             logger.error("Error: %s: %s\n" % (err, debug))
             return False
         elif t == Gst.MessageType.STATE_CHANGED:
