@@ -267,15 +267,20 @@ class SelkiesGamepad:
             return
 
         closed_clients = []
+        loop = asyncio.get_event_loop()
         for fd in self.clients:
             try:
                 client = self.clients[fd]
                 logger.debug("Sending event to client with fd: %d" % fd)
-                await asyncio.to_thread(client.sendall, event)
-            except BrokenPipeError:
-                logger.info("Client %d disconnected" % fd)
+                # Use sock_sendall for non-blocking sockets
+                await loop.sock_sendall(client, event)
+            except (BrokenPipeError, ConnectionResetError, OSError) as e:
+                logger.info("Client %d disconnected: %s" % (fd, e))
                 closed_clients.append(fd)
-                client.close()
+                try:
+                    client.close()
+                except:
+                    pass
 
         for fd in closed_clients:
             del self.clients[fd]
@@ -299,7 +304,9 @@ class SelkiesGamepad:
             config_data = self.__make_config()
             if not config_data:
                 return
-            await asyncio.to_thread(client.sendall, config_data)
+            # Use sock_sendall for non-blocking sockets
+            loop = asyncio.get_event_loop()
+            await loop.sock_sendall(client, config_data)
             await asyncio.sleep(0.5)
             # Send zero values for all buttons and axis.
             if self.config:
@@ -308,12 +315,15 @@ class SelkiesGamepad:
                 for axis_num in range(len(self.config["axes_map"])):
                     self.send_axis(axis_num, 0)
 
-        except BrokenPipeError:
+        except (BrokenPipeError, ConnectionResetError, OSError) as e:
             fd = client.fileno()
             if fd in self.clients:
                 del self.clients[fd]
-            client.close()
-            logger.info("Client disconnected")
+            try:
+                client.close()
+            except:
+                pass
+            logger.info("Client disconnected: %s" % e)
 
     def _create_socket(self):
         """Synchronously create and bind socket so it's ready for connections"""
@@ -351,6 +361,9 @@ class SelkiesGamepad:
 
                 fd = client.fileno()
                 logger.info("Client connected with fd: %d" % fd)
+
+                # Set client socket to non-blocking mode for async operations
+                client.setblocking(False)
 
                 # Add client to dictionary first (setup_client may need it)
                 self.clients[fd] = client
