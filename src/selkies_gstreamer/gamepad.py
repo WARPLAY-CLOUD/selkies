@@ -214,13 +214,37 @@ def normalize_axis_val_from_255(val):
     
     Args:
         val: Axis value in range [0, 255] from frontend
+            - 0 = стик полностью влево/вниз (браузер: -1)
+            - 128 = стик в центре (браузер: 0) 
+            - 255 = стик полностью вправо/вверх (браузер: 1)
         
     Returns:
         Normalized value in range [-32767, 32767], clamped to valid range
+        - Центр стика (val=128) должен давать 0
     """
     # Преобразовать [0, 255] в [-32767, 32767]
-    # val 0 -> -32767, val 127/128 -> 0, val 255 -> 32767
-    normalized = round(ABS_MIN + (val * (ABS_MAX - ABS_MIN)) / 255)
+    # Фронтенд: val = ((browser_val + 1) / 2) * 255
+    # где browser_val ∈ [-1, 1], центр = 0 → val = 128
+    # 
+    # Правильная формула: val 128 (центр) → 0
+    # normalized = (val - 128) * (32767 / 128)
+    # Или: normalized = (val - 128) * 256 (приблизительно)
+    
+    # Точная формула: центр стика (val=128) должен давать 0
+    # Линейное преобразование от центра:
+    # normalized = (val - 128) * scale
+    # 
+    # Для точного соответствия границам:
+    # val=0 → -32767: (0 - 128) * scale = -32767 → scale = 32767/128 = 256.015625
+    # val=255 → 32767: (255 - 128) * scale = 32767 → scale = 32767/127 = 258.007874
+    # 
+    # Используем средний коэффициент для симметрии:
+    # scale ≈ 257, что дает: val=128 → 0, val=0 → -32896, val=255 → 32639
+    # Небольшие отклонения будут исправлены clamp'ом ниже
+    
+    center = 128
+    scale = 65534 / 255  # Точный коэффициент: (32767 - (-32767)) / 255
+    normalized = round((val - center) * scale)
     
     # Clamp to valid range to prevent overflow/underflow
     # struct format 'h' supports -32768 to 32767, but we use -32767 to 32767
@@ -319,50 +343,121 @@ class SelkiesGamepad:
     async def __send_events(self):
         events_processed = 0
         last_status_log_time = time.time()
-        while self.running:
-            if self.events.empty():
-                await asyncio.sleep(0.001)
-                # Log status every 5 seconds when idle
-                current_time = time.time()
-                if current_time - last_status_log_time >= 5.0:
-                    logger.debug("Gamepad server status: queue_size=0, clients=%d, running=%s" % 
-                                (len(self.clients), self.running))
-                    last_status_log_time = current_time
-                continue
-            while self.running and not self.events.empty():
-                queue_size = self.events.qsize()
-                event = self.events.get()
-                events_processed += 1
-                logger.debug("Processing event #%d, queue_size=%d, clients=%d" % 
-                            (events_processed, queue_size, len(self.clients)))
-                await self.send_event(event)
-                # Log status every 100 events
-                if events_processed % 100 == 0:
-                    logger.info("Processed %d events, current queue_size=%d, clients=%d" % 
-                               (events_processed, self.events.qsize(), len(self.clients)))
+        consecutive_errors = 0
+        last_queue_check_time = time.time()
+        
+        logger.info('[%s] Event processing loop started' % time.strftime('%H:%M:%S'))
+        
+        try:
+            while self.running:
+                try:
+                    if self.events.empty():
+                        await asyncio.sleep(0.001)
+                        # Log status every 5 seconds when idle
+                        current_time = time.time()
+                        if current_time - last_status_log_time >= 5.0:
+                            logger.debug('[%s] Gamepad server status: queue_size=0, clients=%d, running=%s' % 
+                                        (time.strftime('%H:%M:%S'), len(self.clients), self.running))
+                            last_status_log_time = current_time
+                        continue
+                    
+                    # Log warning if queue is not empty but not being processed
+                    current_time = time.time()
+                    if current_time - last_queue_check_time >= 10.0 and not self.events.empty():
+                        queue_size = self.events.qsize()
+                        logger.warning('[%s] Queue not empty (size=%d) but events not being processed for >10s!' % 
+                                      (time.strftime('%H:%M:%S'), queue_size))
+                        last_queue_check_time = current_time
+                    
+                    while self.running and not self.events.empty():
+                        try:
+                            queue_size = self.events.qsize()
+                            event = self.events.get()
+                            events_processed += 1
+                            consecutive_errors = 0  # Reset error counter on success
+                            
+                            logger.debug('[%s] Processing event #%d, queue_size=%d, clients=%d' % 
+                                        (time.strftime('%H:%M:%S'), events_processed, queue_size, len(self.clients)))
+                            
+                            await self.send_event(event)
+                            
+                            # Log status every 100 events
+                            if events_processed % 100 == 0:
+                                logger.info('[%s] Processed %d events, current queue_size=%d, clients=%d' % 
+                                           (time.strftime('%H:%M:%S'), events_processed, self.events.qsize(), len(self.clients)))
+                        
+                        except Exception as e:
+                            consecutive_errors += 1
+                            logger.error('[%s] Error processing event #%d: %s (consecutive errors: %d)' % 
+                                        (time.strftime('%H:%M:%S'), events_processed + 1, e, consecutive_errors), exc_info=True)
+                            
+                            # If too many consecutive errors, log warning but continue
+                            if consecutive_errors >= 10:
+                                logger.error('[%s] Too many consecutive errors (%d), but continuing event processing' % 
+                                            (time.strftime('%H:%M:%S'), consecutive_errors))
+                                consecutive_errors = 0  # Reset to avoid log spam
+                            
+                            # Continue processing next event even if current one failed
+                            continue
+                
+                except Exception as e:
+                    logger.error('[%s] Error in event processing loop: %s' % 
+                                (time.strftime('%H:%M:%S'), e), exc_info=True)
+                    await asyncio.sleep(0.1)  # Brief pause before retrying
+                    continue
+        
+        except Exception as e:
+            logger.critical('[%s] Fatal error in event processing loop, stopping: %s' % 
+                           (time.strftime('%H:%M:%S'), e), exc_info=True)
+            self.running = False
+        
+        logger.warning('[%s] Event processing loop stopped (processed %d events total)' % 
+                      (time.strftime('%H:%M:%S'), events_processed))
 
     def send_btn(self, btn_num, btn_val):
         if not self.mapper:
-            logger.warning("failed to send js button event because mapper was not set")
+            logger.warning('[%s] Failed to send js button event because mapper was not set (btn=%d, val=%d)' % 
+                          (time.strftime('%H:%M:%S'), btn_num, btn_val))
             return
-        event = self.mapper.get_mapped_btn(btn_num, btn_val)
-        if event is not None:
-            self.events.put(event)
+        try:
+            event = self.mapper.get_mapped_btn(btn_num, btn_val)
+            if event is not None:
+                queue_size_before = self.events.qsize()
+                self.events.put(event)
+                queue_size_after = self.events.qsize()
+                # Log warning if queue is getting large
+                if queue_size_after > 500:
+                    logger.warning('[%s] Queue size is large: %d events (btn=%d, val=%d)' % 
+                                  (time.strftime('%H:%M:%S'), queue_size_after, btn_num, btn_val))
+                logger.debug('[%s] Added button event (btn=%d, val=%d) to queue: size %d -> %d' % 
+                            (time.strftime('%H:%M:%S'), btn_num, btn_val, queue_size_before, queue_size_after))
+        except Exception as e:
+            logger.error('[%s] Error in send_btn (btn=%d, val=%d): %s' % 
+                        (time.strftime('%H:%M:%S'), btn_num, btn_val, e), exc_info=True)
 
     def send_axis(self, axis_num, axis_val):
         if not self.mapper:
-            logger.warning("failed to send js axis event because mapper was not set")
+            logger.warning('[%s] Failed to send js axis event because mapper was not set (axis=%d, val=%d)' % 
+                          (time.strftime('%H:%M:%S'), axis_num, axis_val))
             return
-        event = self.mapper.get_mapped_axis(axis_num, axis_val)
-        if event is not None:
-            queue_size_before = self.events.qsize()
-            self.events.put(event)
-            queue_size_after = self.events.qsize()
-            logger.debug("Added axis event (axis=%d, val=%d) to queue: size %d -> %d" % 
-                        (axis_num, axis_val, queue_size_before, queue_size_after))
-        else:
-            logger.warning("Failed to create axis event for axis=%d, val=%d (mapper returned None)" % 
-                          (axis_num, axis_val))
+        try:
+            event = self.mapper.get_mapped_axis(axis_num, axis_val)
+            if event is not None:
+                queue_size_before = self.events.qsize()
+                self.events.put(event)
+                queue_size_after = self.events.qsize()
+                # Log warning if queue is getting large
+                if queue_size_after > 500:
+                    logger.warning('[%s] Queue size is large: %d events (axis=%d, val=%d)' % 
+                                  (time.strftime('%H:%M:%S'), queue_size_after, axis_num, axis_val))
+                logger.debug('[%s] Added axis event (axis=%d, val=%d) to queue: size %d -> %d' % 
+                            (time.strftime('%H:%M:%S'), axis_num, axis_val, queue_size_before, queue_size_after))
+            else:
+                logger.warning('[%s] Failed to create axis event for axis=%d, val=%d (mapper returned None)' % 
+                              (time.strftime('%H:%M:%S'), axis_num, axis_val))
+        except Exception as e:
+            logger.error('[%s] Error in send_axis (axis=%d, val=%d): %s' % 
+                        (time.strftime('%H:%M:%S'), axis_num, axis_val, e), exc_info=True)
 
     async def send_event(self, event):
         if len(self.clients) < 1:
