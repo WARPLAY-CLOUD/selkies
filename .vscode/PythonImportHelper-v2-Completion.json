@@ -79,22 +79,6 @@
         "documentation": {}
     },
     {
-        "label": "Queue",
-        "importPath": "queue",
-        "description": "queue",
-        "isExtraImport": true,
-        "detail": "queue",
-        "documentation": {}
-    },
-    {
-        "label": "Empty",
-        "importPath": "queue",
-        "description": "queue",
-        "isExtraImport": true,
-        "detail": "queue",
-        "documentation": {}
-    },
-    {
         "label": "*",
         "importPath": "input_event_codes",
         "description": "input_event_codes",
