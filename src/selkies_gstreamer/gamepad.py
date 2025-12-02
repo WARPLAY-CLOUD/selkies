@@ -7,7 +7,7 @@ import os
 import struct
 import socket
 import time
-from queue import Queue
+from queue import Queue, Empty
 from input_event_codes import *
 from signal import (
     signal,
@@ -280,6 +280,7 @@ class SelkiesGamepad:
 
         # queue of events to send.
         self.events = Queue()
+        self.max_queue_size = 1000  # Maximum queue size to prevent overflow
 
         # flag indicating instance running.
         self.running = False
@@ -361,6 +362,14 @@ class SelkiesGamepad:
                             last_status_log_time = current_time
                         continue
                     
+                    # If queue is very large, process more aggressively
+                    queue_size = self.events.qsize()
+                    if queue_size > 500:
+                        logger.warning('[%s] Queue size is very large (%d), processing aggressively' % 
+                                      (time.strftime('%H:%M:%S'), queue_size))
+                        # Reduce sleep time when queue is large
+                        await asyncio.sleep(0)  # Yield immediately
+                    
                     # Log warning if queue is not empty but not being processed
                     current_time = time.time()
                     if current_time - last_queue_check_time >= 10.0 and not self.events.empty():
@@ -369,22 +378,32 @@ class SelkiesGamepad:
                                       (time.strftime('%H:%M:%S'), queue_size))
                         last_queue_check_time = current_time
                     
+                    # Process events in batch for better performance when queue is large
+                    batch_size = 10 if self.events.qsize() > 100 else 1
+                    events_in_batch = 0
+                    
                     while self.running and not self.events.empty():
                         try:
                             queue_size = self.events.qsize()
                             event = self.events.get()
                             events_processed += 1
+                            events_in_batch += 1
                             consecutive_errors = 0  # Reset error counter on success
                             
-                            logger.debug('[%s] Processing event #%d, queue_size=%d, clients=%d' % 
-                                        (time.strftime('%H:%M:%S'), events_processed, queue_size, len(self.clients)))
+                            # Reduce logging when queue is large to improve performance
+                            if queue_size < 100:
+                                logger.debug('[%s] Processing event #%d, queue_size=%d, clients=%d' % 
+                                            (time.strftime('%H:%M:%S'), events_processed, queue_size, len(self.clients)))
                             
                             await self.send_event(event)
                             
-                            # Log status every 100 events
-                            if events_processed % 100 == 0:
+                            # Log status every 100 events or when batch is complete
+                            if events_processed % 100 == 0 or (events_in_batch >= batch_size and queue_size > 100):
                                 logger.info('[%s] Processed %d events, current queue_size=%d, clients=%d' % 
                                            (time.strftime('%H:%M:%S'), events_processed, self.events.qsize(), len(self.clients)))
+                                events_in_batch = 0
+                                # Yield control briefly to prevent blocking
+                                await asyncio.sleep(0)
                         
                         except Exception as e:
                             consecutive_errors += 1
@@ -423,14 +442,35 @@ class SelkiesGamepad:
             event = self.mapper.get_mapped_btn(btn_num, btn_val)
             if event is not None:
                 queue_size_before = self.events.qsize()
+                
+                # Prevent queue overflow: drop oldest events if queue is full
+                dropped_events = 0
+                while self.events.qsize() >= self.max_queue_size:
+                    try:
+                        self.events.get_nowait()  # Drop oldest event
+                        dropped_events += 1
+                    except Empty:
+                        # Queue is empty (shouldn't happen, but handle it)
+                        break
+                    except Exception as e:
+                        logger.error('[%s] Error dropping old events from queue: %s' % 
+                                    (time.strftime('%H:%M:%S'), e))
+                        break
+                
+                if dropped_events > 0:
+                    logger.warning('[%s] Queue overflow: dropped %d old events, adding new button event (btn=%d, val=%d)' % 
+                                  (time.strftime('%H:%M:%S'), dropped_events, btn_num, btn_val))
+                
                 self.events.put(event)
                 queue_size_after = self.events.qsize()
+                
                 # Log warning if queue is getting large
-                if queue_size_after > 500:
-                    logger.warning('[%s] Queue size is large: %d events (btn=%d, val=%d)' % 
-                                  (time.strftime('%H:%M:%S'), queue_size_after, btn_num, btn_val))
+                if queue_size_after > self.max_queue_size * 0.7:
+                    logger.warning('[%s] Queue size is large: %d/%d events (btn=%d, val=%d)' % 
+                                  (time.strftime('%H:%M:%S'), queue_size_after, self.max_queue_size, btn_num, btn_val))
+                
                 logger.debug('[%s] Added button event (btn=%d, val=%d) to queue: size %d -> %d' % 
-                            (time.strftime('%H:%M:%S'), btn_num, btn_val, queue_size_before, queue_size_after))
+                            (time.strftime('%H:%M:%S'), btn_num, btn_val, queue_size_before - dropped_events, queue_size_after))
         except Exception as e:
             logger.error('[%s] Error in send_btn (btn=%d, val=%d): %s' % 
                         (time.strftime('%H:%M:%S'), btn_num, btn_val, e), exc_info=True)
@@ -444,14 +484,35 @@ class SelkiesGamepad:
             event = self.mapper.get_mapped_axis(axis_num, axis_val)
             if event is not None:
                 queue_size_before = self.events.qsize()
+                
+                # Prevent queue overflow: drop oldest events if queue is full
+                dropped_events = 0
+                while self.events.qsize() >= self.max_queue_size:
+                    try:
+                        self.events.get_nowait()  # Drop oldest event
+                        dropped_events += 1
+                    except Empty:
+                        # Queue is empty (shouldn't happen, but handle it)
+                        break
+                    except Exception as e:
+                        logger.error('[%s] Error dropping old events from queue: %s' % 
+                                    (time.strftime('%H:%M:%S'), e))
+                        break
+                
+                if dropped_events > 0:
+                    logger.warning('[%s] Queue overflow: dropped %d old events, adding new axis event (axis=%d, val=%d)' % 
+                                  (time.strftime('%H:%M:%S'), dropped_events, axis_num, axis_val))
+                
                 self.events.put(event)
                 queue_size_after = self.events.qsize()
+                
                 # Log warning if queue is getting large
-                if queue_size_after > 500:
-                    logger.warning('[%s] Queue size is large: %d events (axis=%d, val=%d)' % 
-                                  (time.strftime('%H:%M:%S'), queue_size_after, axis_num, axis_val))
+                if queue_size_after > self.max_queue_size * 0.7:
+                    logger.warning('[%s] Queue size is large: %d/%d events (axis=%d, val=%d)' % 
+                                  (time.strftime('%H:%M:%S'), queue_size_after, self.max_queue_size, axis_num, axis_val))
+                
                 logger.debug('[%s] Added axis event (axis=%d, val=%d) to queue: size %d -> %d' % 
-                            (time.strftime('%H:%M:%S'), axis_num, axis_val, queue_size_before, queue_size_after))
+                            (time.strftime('%H:%M:%S'), axis_num, axis_val, queue_size_before - dropped_events, queue_size_after))
             else:
                 logger.warning('[%s] Failed to create axis event for axis=%d, val=%d (mapper returned None)' % 
                               (time.strftime('%H:%M:%S'), axis_num, axis_val))
