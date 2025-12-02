@@ -140,15 +140,50 @@ def get_btn_event(btn_num, btn_val):
 
 
 def get_axis_event(axis_num, axis_val):
+    """Create a joystick axis event.
+    
+    Args:
+        axis_num: Axis number (0-based)
+        axis_val: Axis value in range [-32767, 32767] (signed 16-bit)
+        
+    Returns:
+        Packed event data
+    """
+    # Convert to int to ensure proper type for struct.pack
+    # struct format 'h' requires integer type
+    if not isinstance(axis_val, (int, float)):
+        logger.error('[%s] Axis value has invalid type: %s (expected int or float) for axis %d' % 
+                    (time.strftime('%H:%M:%S'), type(axis_val).__name__, axis_num))
+        axis_val = int(axis_val) if axis_val is not None else 0
+    
+    axis_val = int(round(axis_val))  # Ensure integer value
+    
+    # Validate axis value is within signed 16-bit range
+    # struct format 'h' supports -32768 to 32767
+    if axis_val < -32768 or axis_val > 32767:
+        logger.error('[%s] Axis value %d is out of range [-32768, 32767] for axis %d, clamping' % 
+                    (time.strftime('%H:%M:%S'), axis_val, axis_num))
+        axis_val = max(-32768, min(32767, axis_val))
+    
     ts = int((time.time() * 1000) % 1000000000)
 
     # see js_event struct definition above.
     # https://docs.python.org/3/library/struct.html
+    # Format: I (unsigned int, 32-bit) for timestamp
+    #         h (signed short, 16-bit) for value - supports -32768 to 32767
+    #         B (unsigned char, 8-bit) for type
+    #         B (unsigned char, 8-bit) for number
     struct_format = 'IhBB'
-    event = struct.pack(struct_format, ts, axis_val,
-                        JS_EVENT_AXIS, axis_num)
-
-    logger.debug(struct.unpack(struct_format, event))
+    
+    try:
+        event = struct.pack(struct_format, ts, axis_val,
+                            JS_EVENT_AXIS, axis_num)
+        logger.debug('[%s] Packed axis event: axis=%d, value=%d (range: -32768 to 32767)' % 
+                    (time.strftime('%H:%M:%S'), axis_num, axis_val))
+    except struct.error as e:
+        logger.error('[%s] Failed to pack axis event: axis=%d, value=%d, error=%s' % 
+                    (time.strftime('%H:%M:%S'), axis_num, axis_val, e))
+        raise
 
     return event
 
@@ -181,11 +216,24 @@ def normalize_axis_val_from_255(val):
         val: Axis value in range [0, 255] from frontend
         
     Returns:
-        Normalized value in range [-32767, 32767]
+        Normalized value in range [-32767, 32767], clamped to valid range
     """
     # Преобразовать [0, 255] в [-32767, 32767]
     # val 0 -> -32767, val 127/128 -> 0, val 255 -> 32767
-    return round(ABS_MIN + (val * (ABS_MAX - ABS_MIN)) / 255)
+    normalized = round(ABS_MIN + (val * (ABS_MAX - ABS_MIN)) / 255)
+    
+    # Clamp to valid range to prevent overflow/underflow
+    # struct format 'h' supports -32768 to 32767, but we use -32767 to 32767
+    if normalized < ABS_MIN:
+        logger.warning('[%s] Normalized axis value %d is below minimum %d, clamping' % 
+                      (time.strftime('%H:%M:%S'), normalized, ABS_MIN))
+        normalized = ABS_MIN
+    elif normalized > ABS_MAX:
+        logger.warning('[%s] Normalized axis value %d is above maximum %d, clamping' % 
+                      (time.strftime('%H:%M:%S'), normalized, ABS_MAX))
+        normalized = ABS_MAX
+    
+    return normalized
 
 
 class SelkiesGamepad:
@@ -213,16 +261,27 @@ class SelkiesGamepad:
         self.running = False
     
     def set_config(self, name, num_btns, num_axes):
+        logger.info('[%s] Setting config for gamepad: name="%s", buttons=%d, axes=%d' % 
+                   (time.strftime('%H:%M:%S'), name, num_btns, num_axes))
         self.name = name
         self.config = detect_gamepad_config(name)
+        logger.debug('[%s] Gamepad config detected, creating mapper...' % time.strftime('%H:%M:%S'))
         self.mapper = GamepadMapper(self.config, name, num_btns, num_axes)
+        logger.info('[%s] Config set successfully, mapper created' % time.strftime('%H:%M:%S'))
         
         # Send config to any clients that are already connected
         if self.clients:
-            logger.info("Sending config to %d already connected clients" % len(self.clients))
+            logger.info('[%s] Sending config to %d already connected clients' % 
+                       (time.strftime('%H:%M:%S'), len(self.clients)))
             for client in list(self.clients.values()):
+                fd = client.fileno() if client else None
+                logger.debug('[%s] Creating async task to send config to client %d' % 
+                            (time.strftime('%H:%M:%S'), fd))
                 # Create task to send config asynchronously
                 asyncio.create_task(self.__send_config_to_client(client))
+        else:
+            logger.debug('[%s] No clients connected yet, config will be sent when client connects' % 
+                        time.strftime('%H:%M:%S'))
 
     def __make_config(self):
         '''
@@ -230,11 +289,14 @@ class SelkiesGamepad:
         Requires that self.config has been set first.
         '''
         if not self.config:
-            logger.error("could not make js config because it has not yet been set.")
+            logger.error('[%s] Could not make js config because it has not yet been set.' % 
+                        time.strftime('%H:%M:%S'))
             return None
 
         num_btns = len(self.config["btn_map"])
         num_axes = len(self.config["axes_map"])
+        logger.debug('[%s] Building config: buttons=%d, axes=%d' % 
+                    (time.strftime('%H:%M:%S'), num_btns, num_axes))
 
         # zero fill array to max length.
         btn_map = [i for i in self.config["btn_map"]]
@@ -251,6 +313,7 @@ class SelkiesGamepad:
                            *btn_map,
                            *axes_map
                            )
+        logger.debug('[%s] Config data built: %d bytes' % (time.strftime('%H:%M:%S'), len(data)))
         return data
 
     async def __send_events(self):
@@ -358,18 +421,21 @@ class SelkiesGamepad:
     async def setup_client(self, client):
         try:
             fd = client.fileno()
-            logger.info("Setting up client with fd: %d" % fd)
+            logger.info('[%s] Setting up client with fd: %d' % (time.strftime('%H:%M:%S'), fd))
             
             # If config is not ready yet, client is already in self.clients dict
             # and will receive config when set_config is called
             if not self.config:
-                logger.info("Config not ready yet, client %d will receive config when available" % fd)
+                logger.warning('[%s] Config not ready yet, client %d will receive config when available' % 
+                              (time.strftime('%H:%M:%S'), fd))
                 return
             
+            logger.debug('[%s] Config is ready, proceeding with config send to client %d' % 
+                        (time.strftime('%H:%M:%S'), fd))
             await self.__send_config_to_client(client)
         except Exception as e:
-            logger.error("Error in setup_client (fd: %d): %s" % (
-                client.fileno() if client else None, e), exc_info=True)
+            logger.error('[%s] Error in setup_client (fd: %d): %s' % 
+                        (time.strftime('%H:%M:%S'), client.fileno() if client else None, e), exc_info=True)
             # Re-raise to let caller handle cleanup
             raise
 
@@ -377,21 +443,50 @@ class SelkiesGamepad:
         """Send configuration to a connected client"""
         try:
             fd = client.fileno()
-            logger.info("Sending config to client with fd: %d" % fd)
+            logger.info('[%s] Preparing to send config to client with fd: %d' % 
+                       (time.strftime('%H:%M:%S'), fd))
+            config_start_time = time.time()
             config_data = self.__make_config()
             if not config_data:
-                logger.warning("No config data available for client %d" % fd)
+                logger.warning('[%s] No config data available for client %d' % 
+                              (time.strftime('%H:%M:%S'), fd))
                 return
+            config_size = len(config_data)
+            logger.info('[%s] Config data prepared: %d bytes for client %d' % 
+                       (time.strftime('%H:%M:%S'), config_size, fd))
+            
             # Use sock_sendall for non-blocking sockets
             loop = asyncio.get_event_loop()
+            send_start_time = time.time()
+            logger.debug('[%s] Sending config (%d bytes) to client %d...' % 
+                        (time.strftime('%H:%M:%S'), config_size, fd))
             await loop.sock_sendall(client, config_data)
+            send_duration = time.time() - send_start_time
+            logger.info('[%s] Config sent to client %d in %.3fs (%d bytes)' % 
+                       (time.strftime('%H:%M:%S'), fd, send_duration, config_size))
+            
+            logger.debug('[%s] Waiting 0.5s before sending zero values to client %d...' % 
+                        (time.strftime('%H:%M:%S'), fd))
             await asyncio.sleep(0.5)
+            
             # Send zero values for all buttons and axis.
             if self.config:
-                for btn_num in range(len(self.config["btn_map"])):
+                num_btns = len(self.config["btn_map"])
+                num_axes = len(self.config["axes_map"])
+                logger.debug('[%s] Sending zero values: %d buttons, %d axes to client %d' % 
+                            (time.strftime('%H:%M:%S'), num_btns, num_axes, fd))
+                zero_start_time = time.time()
+                for btn_num in range(num_btns):
                     self.send_btn(btn_num, 0)
-                for axis_num in range(len(self.config["axes_map"])):
+                for axis_num in range(num_axes):
                     self.send_axis(axis_num, 0)
+                zero_duration = time.time() - zero_start_time
+                logger.debug('[%s] Zero values sent to client %d in %.3fs' % 
+                            (time.strftime('%H:%M:%S'), fd, zero_duration))
+            
+            total_config_duration = time.time() - config_start_time
+            logger.info('[%s] Config fully sent to client %d (total time: %.3fs)' % 
+                       (time.strftime('%H:%M:%S'), fd, total_config_duration))
         except (BrokenPipeError, ConnectionResetError, OSError) as e:
             fd = client.fileno()
             if fd in self.clients:
@@ -416,25 +511,37 @@ class SelkiesGamepad:
 
     def _create_socket(self):
         """Synchronously create and bind socket so it's ready for connections"""
+        logger.info('[%s] Creating socket at %s...' % (time.strftime('%H:%M:%S'), self.socket_path))
         try:
-            os.unlink(self.socket_path)
-        except OSError:
             if os.path.exists(self.socket_path):
+                logger.debug('[%s] Removing existing socket file: %s' % 
+                            (time.strftime('%H:%M:%S'), self.socket_path))
+                os.unlink(self.socket_path)
+                logger.debug('[%s] Existing socket file removed' % time.strftime('%H:%M:%S'))
+        except OSError as e:
+            if os.path.exists(self.socket_path):
+                logger.error('[%s] Failed to remove existing socket file: %s' % 
+                            (time.strftime('%H:%M:%S'), e))
                 raise
 
+        logger.debug('[%s] Creating UNIX domain socket...' % time.strftime('%H:%M:%S'))
         self.server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        logger.debug('[%s] Binding socket to %s...' % (time.strftime('%H:%M:%S'), self.socket_path))
         self.server.bind(self.socket_path)
+        logger.debug('[%s] Setting socket to listen mode...' % time.strftime('%H:%M:%S'))
         self.server.listen(1)
+        logger.debug('[%s] Setting socket to non-blocking mode...' % time.strftime('%H:%M:%S'))
         self.server.setblocking(False)
 
-        logger.info('Socket created and bound at %s' % self.socket_path)
+        logger.info('[%s] Socket created and bound at %s' % (time.strftime('%H:%M:%S'), self.socket_path))
 
     async def run_server(self):
         # Create socket if not already created
         if self.server is None:
             self._create_socket()
 
-        logger.info('Listening for connections on %s' % self.socket_path)
+        logger.info('[%s] Starting gamepad server, listening for connections on %s' % 
+                   (time.strftime('%H:%M:%S'), self.socket_path))
 
         # start task to process event queue.
         asyncio.create_task(self.__send_events())
@@ -442,63 +549,100 @@ class SelkiesGamepad:
         self.running = True
         server_start_time = time.time()
         last_status_log_time = time.time()
+        connection_attempts = 0
+        successful_connections = 0
         try:
             while self.running:
                 try:
-                    client, _ = await asyncio.wait_for(
+                    logger.debug('[%s] Waiting for client connection (attempt #%d)...' % 
+                                (time.strftime('%H:%M:%S'), connection_attempts + 1))
+                    connection_attempts += 1
+                    accept_start_time = time.time()
+                    client, addr = await asyncio.wait_for(
                         asyncio.get_event_loop().sock_accept(self.server), timeout=1)
+                    accept_duration = time.time() - accept_start_time
+                    logger.info('[%s] Client connection accepted in %.3fs (attempt #%d)' % 
+                               (time.strftime('%H:%M:%S'), accept_duration, connection_attempts))
                 except asyncio.TimeoutError:
                     # Log server status every 30 seconds
                     current_time = time.time()
                     if current_time - last_status_log_time >= 30.0:
                         uptime = current_time - server_start_time
-                        logger.info("Gamepad server status: uptime=%.1fs, clients=%d, queue_size=%d, running=%s" % 
-                                   (uptime, len(self.clients), self.events.qsize(), self.running))
+                        logger.info('[%s] Gamepad server status: uptime=%.1fs, connection_attempts=%d, '
+                                   'successful_connections=%d, clients=%d, queue_size=%d, running=%s' % 
+                                   (time.strftime('%H:%M:%S'), uptime, connection_attempts, 
+                                    successful_connections, len(self.clients), self.events.qsize(), self.running))
                         last_status_log_time = current_time
                     continue
                 except Exception as e:
-                    logger.error("Error accepting client connection: %s" % e, exc_info=True)
+                    logger.error('[%s] Error accepting client connection (attempt #%d): %s' % 
+                                (time.strftime('%H:%M:%S'), connection_attempts, e), exc_info=True)
                     continue
 
                 # Handle client connection with error handling to prevent server crash
+                connection_handle_start = time.time()
                 try:
                     fd = client.fileno()
-                    logger.info("Client connected with fd: %d (total clients: %d)" % (fd, len(self.clients) + 1))
+                    successful_connections += 1
+                    logger.info('[%s] Client connected with fd: %d (total clients: %d, successful: %d/%d)' % 
+                               (time.strftime('%H:%M:%S'), fd, len(self.clients) + 1, 
+                                successful_connections, connection_attempts))
 
                     # Set client socket to non-blocking mode for async operations
                     client.setblocking(False)
+                    logger.debug('[%s] Set client %d to non-blocking mode' % 
+                                (time.strftime('%H:%M:%S'), fd))
 
                     # Add client to dictionary first (setup_client may need it)
                     self.clients[fd] = client
-                    logger.debug("Added client %d to clients dict (total: %d)" % (fd, len(self.clients)))
+                    logger.info('[%s] Added client %d to clients dict (total: %d)' % 
+                               (time.strftime('%H:%M:%S'), fd, len(self.clients)))
 
                     # Send client the joystick configuration
+                    setup_start = time.time()
                     await self.setup_client(client)
-                    logger.debug("Successfully set up client %d" % fd)
+                    setup_duration = time.time() - setup_start
+                    logger.info('[%s] Successfully set up client %d in %.3fs' % 
+                               (time.strftime('%H:%M:%S'), fd, setup_duration))
+                    
+                    total_handle_duration = time.time() - connection_handle_start
+                    logger.info('[%s] Client %d fully connected and ready (total setup time: %.3fs)' % 
+                               (time.strftime('%H:%M:%S'), fd, total_handle_duration))
                 except Exception as e:
-                    logger.error("Error handling client connection (fd: %d): %s (remaining clients: %d)" % (
-                        client.fileno() if client else None, e, len(self.clients)), exc_info=True)
+                    logger.error('[%s] Error handling client connection (fd: %d): %s (remaining clients: %d)' % 
+                                (time.strftime('%H:%M:%S'), client.fileno() if client else None, e, len(self.clients)), 
+                                exc_info=True)
                     # Clean up failed client
                     try:
                         if client:
                             fd = client.fileno()
                             if fd in self.clients:
                                 del self.clients[fd]
+                                logger.info('[%s] Removed failed client %d from clients dict' % 
+                                           (time.strftime('%H:%M:%S'), fd))
                             client.close()
-                            logger.debug("Cleaned up failed client %d" % fd)
+                            logger.info('[%s] Closed socket for failed client %d' % 
+                                       (time.strftime('%H:%M:%S'), fd))
                     except Exception as cleanup_error:
-                        logger.error("Error during cleanup of failed client: %s" % cleanup_error, exc_info=True)
+                        logger.error('[%s] Error during cleanup of failed client: %s' % 
+                                    (time.strftime('%H:%M:%S'), cleanup_error), exc_info=True)
                     # Continue serving other clients
+                    logger.info('[%s] Continuing to serve other clients after error' % 
+                               time.strftime('%H:%M:%S'))
                     continue
         finally:
+            logger.info('[%s] Gamepad server shutting down...' % time.strftime('%H:%M:%S'))
             if self.server:
+                logger.debug('[%s] Closing server socket...' % time.strftime('%H:%M:%S'))
                 self.server.close()
             try:
+                logger.debug('[%s] Removing socket file: %s' % (time.strftime('%H:%M:%S'), self.socket_path))
                 os.unlink(self.socket_path)
-            except:
-                pass
-        
-        logger.info("Stopped gamepad socket server for %s" % self.socket_path)
+                logger.debug('[%s] Socket file removed' % time.strftime('%H:%M:%S'))
+            except Exception as e:
+                logger.warning('[%s] Error removing socket file: %s' % (time.strftime('%H:%M:%S'), e))
+            logger.info('[%s] Stopped gamepad socket server for %s (clients: %d)' % 
+                       (time.strftime('%H:%M:%S'), self.socket_path, len(self.clients)))
 
     def stop_server(self):
         self.running = False
@@ -551,14 +695,27 @@ class GamepadMapper:
         return get_btn_event(mapped_btn, int(btn_val))
 
     def get_mapped_axis(self, axis_num, axis_val):
+        # Validate input value is in expected range [0, 255]
+        if axis_val < 0 or axis_val > 255:
+            logger.warning('[%s] Axis %d input value %d is outside expected range [0, 255], clamping' % 
+                          (time.strftime('%H:%M:%S'), axis_num, axis_val))
+            axis_val = max(0, min(255, axis_val))
+        
         mapped_axis = self.config["mapping"]["axes"].get(axis_num, axis_num)
         if mapped_axis >= len(self.config["axes_map"]):
-            logger.error("cannot send axis %d, max axis num is %d" %
-                         (mapped_axis, len(self.config["axes_map"]) - 1))
+            logger.error('[%s] Cannot send axis %d, max axis num is %d' %
+                         (time.strftime('%H:%M:%S'), mapped_axis, len(self.config["axes_map"]) - 1))
             return None
 
         # Normalize axis value from [0, 255] range (from frontend) to [-32767, 32767] range
         normalized_val = normalize_axis_val_from_255(axis_val)
-        logger.debug("Axis %d: input=%d (0-255) -> normalized=%d (-32767 to 32767)" % 
-                     (axis_num, axis_val, normalized_val))
-        return get_axis_event(mapped_axis, normalized_val)
+        logger.debug('[%s] Axis %d: input=%d (0-255) -> normalized=%d (-32767 to 32767), mapped_axis=%d' % 
+                     (time.strftime('%H:%M:%S'), axis_num, axis_val, normalized_val, mapped_axis))
+        
+        try:
+            event = get_axis_event(mapped_axis, normalized_val)
+            return event
+        except Exception as e:
+            logger.error('[%s] Failed to create axis event for axis %d (mapped=%d) with value %d: %s' % 
+                        (time.strftime('%H:%M:%S'), axis_num, mapped_axis, normalized_val, e), exc_info=True)
+            return None

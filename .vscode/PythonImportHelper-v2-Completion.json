@@ -1422,7 +1422,7 @@
         "kind": 2,
         "importPath": "src.selkies_gstreamer.gamepad",
         "description": "src.selkies_gstreamer.gamepad",
-        "peekOfCode": "def get_axis_event(axis_num, axis_val):\n    ts = int((time.time() * 1000) % 1000000000)\n    # see js_event struct definition above.\n    # https://docs.python.org/3/library/struct.html\n    struct_format = 'IhBB'\n    event = struct.pack(struct_format, ts, axis_val,\n                        JS_EVENT_AXIS, axis_num)\n    logger.debug(struct.unpack(struct_format, event))\n    return event\ndef detect_gamepad_config(name):",
+        "peekOfCode": "def get_axis_event(axis_num, axis_val):\n    \"\"\"Create a joystick axis event.\n    Args:\n        axis_num: Axis number (0-based)\n        axis_val: Axis value in range [-32767, 32767] (signed 16-bit)\n    Returns:\n        Packed event data\n    \"\"\"\n    # Convert to int to ensure proper type for struct.pack\n    # struct format 'h' requires integer type",
         "detail": "src.selkies_gstreamer.gamepad",
         "documentation": {}
     },
@@ -1458,7 +1458,7 @@
         "kind": 2,
         "importPath": "src.selkies_gstreamer.gamepad",
         "description": "src.selkies_gstreamer.gamepad",
-        "peekOfCode": "def normalize_axis_val(val):\n    return round(ABS_MIN + ((val+1) * (ABS_MAX - ABS_MIN)) / 2)\ndef normalize_trigger_val(val):\n    return round(val * (ABS_MAX - ABS_MIN)) + ABS_MIN\ndef normalize_axis_val_from_255(val):\n    \"\"\"Normalize axis value from [0, 255] range to [-32767, 32767] range.\n    Args:\n        val: Axis value in range [0, 255] from frontend\n    Returns:\n        Normalized value in range [-32767, 32767]",
+        "peekOfCode": "def normalize_axis_val(val):\n    return round(ABS_MIN + ((val+1) * (ABS_MAX - ABS_MIN)) / 2)\ndef normalize_trigger_val(val):\n    return round(val * (ABS_MAX - ABS_MIN)) + ABS_MIN\ndef normalize_axis_val_from_255(val):\n    \"\"\"Normalize axis value from [0, 255] range to [-32767, 32767] range.\n    Args:\n        val: Axis value in range [0, 255] from frontend\n    Returns:\n        Normalized value in range [-32767, 32767], clamped to valid range",
         "detail": "src.selkies_gstreamer.gamepad",
         "documentation": {}
     },
@@ -1467,7 +1467,7 @@
         "kind": 2,
         "importPath": "src.selkies_gstreamer.gamepad",
         "description": "src.selkies_gstreamer.gamepad",
-        "peekOfCode": "def normalize_trigger_val(val):\n    return round(val * (ABS_MAX - ABS_MIN)) + ABS_MIN\ndef normalize_axis_val_from_255(val):\n    \"\"\"Normalize axis value from [0, 255] range to [-32767, 32767] range.\n    Args:\n        val: Axis value in range [0, 255] from frontend\n    Returns:\n        Normalized value in range [-32767, 32767]\n    \"\"\"\n    # Преобразовать [0, 255] в [-32767, 32767]",
+        "peekOfCode": "def normalize_trigger_val(val):\n    return round(val * (ABS_MAX - ABS_MIN)) + ABS_MIN\ndef normalize_axis_val_from_255(val):\n    \"\"\"Normalize axis value from [0, 255] range to [-32767, 32767] range.\n    Args:\n        val: Axis value in range [0, 255] from frontend\n    Returns:\n        Normalized value in range [-32767, 32767], clamped to valid range\n    \"\"\"\n    # Преобразовать [0, 255] в [-32767, 32767]",
         "detail": "src.selkies_gstreamer.gamepad",
         "documentation": {}
     },
@@ -1476,7 +1476,7 @@
         "kind": 2,
         "importPath": "src.selkies_gstreamer.gamepad",
         "description": "src.selkies_gstreamer.gamepad",
-        "peekOfCode": "def normalize_axis_val_from_255(val):\n    \"\"\"Normalize axis value from [0, 255] range to [-32767, 32767] range.\n    Args:\n        val: Axis value in range [0, 255] from frontend\n    Returns:\n        Normalized value in range [-32767, 32767]\n    \"\"\"\n    # Преобразовать [0, 255] в [-32767, 32767]\n    # val 0 -> -32767, val 127/128 -> 0, val 255 -> 32767\n    return round(ABS_MIN + (val * (ABS_MAX - ABS_MIN)) / 255)",
+        "peekOfCode": "def normalize_axis_val_from_255(val):\n    \"\"\"Normalize axis value from [0, 255] range to [-32767, 32767] range.\n    Args:\n        val: Axis value in range [0, 255] from frontend\n    Returns:\n        Normalized value in range [-32767, 32767], clamped to valid range\n    \"\"\"\n    # Преобразовать [0, 255] в [-32767, 32767]\n    # val 0 -> -32767, val 127/128 -> 0, val 255 -> 32767\n    normalized = round(ABS_MIN + (val * (ABS_MAX - ABS_MIN)) / 255)",
         "detail": "src.selkies_gstreamer.gamepad",
         "documentation": {}
     },
