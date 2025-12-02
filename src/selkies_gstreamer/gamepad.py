@@ -175,8 +175,7 @@ def get_axis_event(axis_num, axis_val):
     struct_format = 'IhBB'
     
     try:
-    event = struct.pack(struct_format, ts, axis_val,
-                        JS_EVENT_AXIS, axis_num)
+        event = struct.pack(struct_format, ts, axis_val, JS_EVENT_AXIS, axis_num)
         logger.debug('[%s] Packed axis event: axis=%d, value=%d (range: -32768 to 32767)' % 
                     (time.strftime('%H:%M:%S'), axis_num, axis_val))
     except struct.error as e:
