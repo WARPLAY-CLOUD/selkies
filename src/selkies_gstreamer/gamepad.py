@@ -173,6 +173,21 @@ def normalize_axis_val(val):
 def normalize_trigger_val(val):
     return round(val * (ABS_MAX - ABS_MIN)) + ABS_MIN
 
+
+def normalize_axis_val_from_255(val):
+    """Normalize axis value from [0, 255] range to [-32767, 32767] range.
+    
+    Args:
+        val: Axis value in range [0, 255] from frontend
+        
+    Returns:
+        Normalized value in range [-32767, 32767]
+    """
+    # Преобразовать [0, 255] в [-32767, 32767]
+    # val 0 -> -32767, val 127/128 -> 0, val 255 -> 32767
+    return round(ABS_MIN + (val * (ABS_MAX - ABS_MIN)) / 255)
+
+
 class SelkiesGamepad:
     def __init__(self, socket_path):
         self.socket_path = socket_path
@@ -239,12 +254,29 @@ class SelkiesGamepad:
         return data
 
     async def __send_events(self):
+        events_processed = 0
+        last_status_log_time = time.time()
         while self.running:
             if self.events.empty():
                 await asyncio.sleep(0.001)
+                # Log status every 5 seconds when idle
+                current_time = time.time()
+                if current_time - last_status_log_time >= 5.0:
+                    logger.debug("Gamepad server status: queue_size=0, clients=%d, running=%s" % 
+                                (len(self.clients), self.running))
+                    last_status_log_time = current_time
                 continue
             while self.running and not self.events.empty():
-                await self.send_event(self.events.get())
+                queue_size = self.events.qsize()
+                event = self.events.get()
+                events_processed += 1
+                logger.debug("Processing event #%d, queue_size=%d, clients=%d" % 
+                            (events_processed, queue_size, len(self.clients)))
+                await self.send_event(event)
+                # Log status every 100 events
+                if events_processed % 100 == 0:
+                    logger.info("Processed %d events, current queue_size=%d, clients=%d" % 
+                               (events_processed, self.events.qsize(), len(self.clients)))
 
     def send_btn(self, btn_num, btn_val):
         if not self.mapper:
@@ -260,27 +292,41 @@ class SelkiesGamepad:
             return
         event = self.mapper.get_mapped_axis(axis_num, axis_val)
         if event is not None:
+            queue_size_before = self.events.qsize()
             self.events.put(event)
+            queue_size_after = self.events.qsize()
+            logger.debug("Added axis event (axis=%d, val=%d) to queue: size %d -> %d" % 
+                        (axis_num, axis_val, queue_size_before, queue_size_after))
+        else:
+            logger.warning("Failed to create axis event for axis=%d, val=%d (mapper returned None)" % 
+                          (axis_num, axis_val))
 
     async def send_event(self, event):
         if len(self.clients) < 1:
+            logger.debug("No clients connected, dropping event (size: %d bytes)" % len(event))
             return
 
         closed_clients = []
         loop = asyncio.get_event_loop()
         # Create a copy of client list to avoid modification during iteration
         client_fds = list(self.clients.keys())
+        event_size = len(event)
+        logger.debug("Sending event (size: %d bytes) to %d client(s)" % (event_size, len(client_fds)))
+        
         for fd in client_fds:
             try:
                 client = self.clients.get(fd)
                 if client is None:
                     # Client was already removed
+                    logger.debug("Client %d was already removed from clients dict" % fd)
                     continue
-                logger.debug("Sending event to client with fd: %d" % fd)
+                logger.debug("Sending event to client with fd: %d (total clients: %d)" % (fd, len(self.clients)))
                 # Use sock_sendall for non-blocking sockets
                 await loop.sock_sendall(client, event)
+                logger.debug("Successfully sent event to client %d" % fd)
             except (BrokenPipeError, ConnectionResetError, OSError) as e:
-                logger.info("Client %d disconnected during event send: %s" % (fd, e))
+                logger.warning("Client %d disconnected during event send: %s (remaining clients: %d)" % 
+                              (fd, e, len(self.clients) - 1))
                 closed_clients.append(fd)
                 try:
                     if client:
@@ -288,7 +334,8 @@ class SelkiesGamepad:
                 except:
                     pass
             except Exception as e:
-                logger.error("Unexpected error sending event to client %d: %s" % (fd, e), exc_info=True)
+                logger.error("Unexpected error sending event to client %d: %s (remaining clients: %d)" % 
+                            (fd, e, len(self.clients) - 1), exc_info=True)
                 # Mark client for removal on unexpected errors
                 closed_clients.append(fd)
                 try:
@@ -298,12 +345,15 @@ class SelkiesGamepad:
                     pass
 
         # Safely remove closed clients
+        if closed_clients:
+            logger.info("Removing %d disconnected client(s): %s (remaining: %d)" % 
+                       (len(closed_clients), closed_clients, len(self.clients) - len(closed_clients)))
         for fd in closed_clients:
             try:
                 if fd in self.clients:
                     del self.clients[fd]
-            except:
-                pass
+            except Exception as e:
+                logger.error("Error removing client %d from clients dict: %s" % (fd, e))
 
     async def setup_client(self, client):
         try:
@@ -390,12 +440,21 @@ class SelkiesGamepad:
         asyncio.create_task(self.__send_events())
 
         self.running = True
+        server_start_time = time.time()
+        last_status_log_time = time.time()
         try:
             while self.running:
                 try:
                     client, _ = await asyncio.wait_for(
                         asyncio.get_event_loop().sock_accept(self.server), timeout=1)
                 except asyncio.TimeoutError:
+                    # Log server status every 30 seconds
+                    current_time = time.time()
+                    if current_time - last_status_log_time >= 30.0:
+                        uptime = current_time - server_start_time
+                        logger.info("Gamepad server status: uptime=%.1fs, clients=%d, queue_size=%d, running=%s" % 
+                                   (uptime, len(self.clients), self.events.qsize(), self.running))
+                        last_status_log_time = current_time
                     continue
                 except Exception as e:
                     logger.error("Error accepting client connection: %s" % e, exc_info=True)
@@ -404,19 +463,21 @@ class SelkiesGamepad:
                 # Handle client connection with error handling to prevent server crash
                 try:
                     fd = client.fileno()
-                    logger.info("Client connected with fd: %d" % fd)
+                    logger.info("Client connected with fd: %d (total clients: %d)" % (fd, len(self.clients) + 1))
 
                     # Set client socket to non-blocking mode for async operations
                     client.setblocking(False)
 
                     # Add client to dictionary first (setup_client may need it)
                     self.clients[fd] = client
+                    logger.debug("Added client %d to clients dict (total: %d)" % (fd, len(self.clients)))
 
                     # Send client the joystick configuration
                     await self.setup_client(client)
+                    logger.debug("Successfully set up client %d" % fd)
                 except Exception as e:
-                    logger.error("Error handling client connection (fd: %d): %s" % (
-                        client.fileno() if client else None, e), exc_info=True)
+                    logger.error("Error handling client connection (fd: %d): %s (remaining clients: %d)" % (
+                        client.fileno() if client else None, e, len(self.clients)), exc_info=True)
                     # Clean up failed client
                     try:
                         if client:
@@ -424,8 +485,9 @@ class SelkiesGamepad:
                             if fd in self.clients:
                                 del self.clients[fd]
                             client.close()
-                    except:
-                        pass
+                            logger.debug("Cleaned up failed client %d" % fd)
+                    except Exception as cleanup_error:
+                        logger.error("Error during cleanup of failed client: %s" % cleanup_error, exc_info=True)
                     # Continue serving other clients
                     continue
         finally:
@@ -495,5 +557,8 @@ class GamepadMapper:
                          (mapped_axis, len(self.config["axes_map"]) - 1))
             return None
 
-        # Normalize axis value to be within range.
-        return get_axis_event(mapped_axis, normalize_axis_val(axis_val))
+        # Normalize axis value from [0, 255] range (from frontend) to [-32767, 32767] range
+        normalized_val = normalize_axis_val_from_255(axis_val)
+        logger.debug("Axis %d: input=%d (0-255) -> normalized=%d (-32767 to 32767)" % 
+                     (axis_num, axis_val, normalized_val))
+        return get_axis_event(mapped_axis, normalized_val)

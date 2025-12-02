@@ -214,7 +214,12 @@ class WebRTCInput:
             logger.error("cannot send axis because js%d is not connected" % js_num)
             return
 
-        logger.debug("sending js%d axis num %d with val %d" % (js_num, axis_num, axis_val))
+        logger.debug("sending js%d axis num %d with val %d (range: 0-255)" % (js_num, axis_num, axis_val))
+        
+        # Validate input range
+        if axis_val < 0 or axis_val > 255:
+            logger.warning("Axis value %d out of expected range [0, 255] for js%d axis %d" % 
+                          (axis_val, js_num, axis_num))
 
         js.send_axis(axis_num, axis_val)
 
