@@ -7,7 +7,6 @@ import os
 import struct
 import socket
 import time
-from queue import Queue, Empty
 from input_event_codes import *
 from signal import (
     signal,
@@ -231,20 +230,30 @@ def normalize_axis_val_from_255(val):
     # Или: normalized = (val - 128) * 256 (приблизительно)
     
     # Точная формула: центр стика (val=128) должен давать 0
-    # Линейное преобразование от центра:
-    # normalized = (val - 128) * scale
+    # Линейная интерполяция с точным соответствием границам:
+    # val = 0 → -32767, val = 128 → 0, val = 255 → 32767
     # 
-    # Для точного соответствия границам:
-    # val=0 → -32767: (0 - 128) * scale = -32767 → scale = 32767/128 = 256.015625
-    # val=255 → 32767: (255 - 128) * scale = 32767 → scale = 32767/127 = 258.007874
-    # 
-    # Используем средний коэффициент для симметрии:
-    # scale ≈ 257, что дает: val=128 → 0, val=0 → -32896, val=255 → 32639
-    # Небольшие отклонения будут исправлены clamp'ом ниже
+    # Формула: normalized = (val / 255) * (ABS_MAX - ABS_MIN) + ABS_MIN - ABS_MAX
+    # Или проще: normalized = (val - 128) * (65534 / 255)
+    # Но для точности используем интерполяцию с учетом центра:
+    
+    # Используем точную линейную интерполяцию:
+    # Для val [0, 128]: normalized = val * (-32767 / 128)
+    # Для val [128, 255]: normalized = (val - 128) * (32767 / 127)
     
     center = 128
-    scale = 65534 / 255  # Точный коэффициент: (32767 - (-32767)) / 255
-    normalized = round((val - center) * scale)
+    if val <= center:
+        # Слева от центра: [0, 128] → [-32767, 0]
+        # Линейная интерполяция от центра: normalized = (val - 128) * scale
+        # val=0 → -32767, val=128 → 0
+        # scale = 32767 / 128 = 256.015625
+        normalized = round((val - center) * (ABS_MAX / center))
+    else:
+        # Справа от центра: [129, 255] → [1, 32767]
+        # Линейная интерполяция от центра: normalized = (val - 128) * scale
+        # val=129 → 1, val=255 → 32767
+        # scale = 32767 / 127 = 258.007874
+        normalized = round((val - center) * (ABS_MAX / (255 - center)))
     
     # Clamp to valid range to prevent overflow/underflow
     # struct format 'h' supports -32768 to 32767, but we use -32767 to 32767
@@ -278,8 +287,8 @@ class SelkiesGamepad:
         # Map of client file descriptors to sockets.
         self.clients = {}
 
-        # queue of events to send.
-        self.events = Queue()
+        # queue of events to send - use async queue to prevent blocking
+        self.events = asyncio.Queue(maxsize=1000)
         self.max_queue_size = 1000  # Maximum queue size to prevent overflow
 
         # flag indicating instance running.
@@ -350,10 +359,10 @@ class SelkiesGamepad:
         logger.info('[%s] Event processing loop started' % time.strftime('%H:%M:%S'))
         
         try:
-            while self.running:
+        while self.running:
                 try:
-                    if self.events.empty():
-                        await asyncio.sleep(0.001)
+                    if self.events.qsize() == 0:
+                await asyncio.sleep(0.001)
                         # Log status every 5 seconds when idle
                         current_time = time.time()
                         if current_time - last_status_log_time >= 5.0:
@@ -372,38 +381,92 @@ class SelkiesGamepad:
                     
                     # Log warning if queue is not empty but not being processed
                     current_time = time.time()
-                    if current_time - last_queue_check_time >= 10.0 and not self.events.empty():
-                        queue_size = self.events.qsize()
-                        logger.warning('[%s] Queue not empty (size=%d) but events not being processed for >10s!' % 
-                                      (time.strftime('%H:%M:%S'), queue_size))
+                    queue_size = self.events.qsize()
+                    if current_time - last_queue_check_time >= 10.0 and queue_size > 0:
+                        logger.error('[%s] Queue not empty (size=%d) but events not being processed for >10s! '
+                                    'This indicates the processing loop may be stuck.' % 
+                                    (time.strftime('%H:%M:%S'), queue_size))
+                        # Log more diagnostic info
+                        logger.error('[%s] Diagnostic: running=%s, events_processed=%d, clients=%d' % 
+                                    (time.strftime('%H:%M:%S'), self.running, events_processed, len(self.clients)))
                         last_queue_check_time = current_time
+                        # Try to force yield
+                        await asyncio.sleep(0)
                     
                     # Process events in batch for better performance when queue is large
-                    batch_size = 10 if self.events.qsize() > 100 else 1
+                    queue_size_start = self.events.qsize()
+                    batch_size = 10 if queue_size_start > 100 else 1
                     events_in_batch = 0
                     
-                    while self.running and not self.events.empty():
+                    # Track when we last processed an event
+                    last_event_processed_time = time.time()
+                    loop_entry_time = time.time()
+                    
+                    logger.debug('[%s] Entering event processing loop: queue_size=%d, batch_size=%d' % 
+                                (time.strftime('%H:%M:%S'), queue_size_start, batch_size))
+                    
+                    while self.running and self.events.qsize() > 0:
                         try:
+                            # Check if we're stuck (no event processed in last 5 seconds)
+                            current_time = time.time()
+                            if current_time - last_event_processed_time > 5.0:
+                                queue_size = self.events.qsize()
+                                logger.error('[%s] Event processing appears stuck! Queue size: %d, '
+                                           'no events processed in last %.1fs' % 
+                                           (time.strftime('%H:%M:%S'), queue_size, 
+                                            current_time - last_event_processed_time))
+                                # Try to recover by skipping current event
+                                try:
+                                    self.events.get_nowait()  # Skip potentially problematic event
+                                except asyncio.QueueEmpty:
+                                    pass
+                                except Exception:
+                                    pass
+                                last_event_processed_time = current_time
+                                # Yield to allow other tasks to run
+                                await asyncio.sleep(0.1)
+                                continue
+                            
                             queue_size = self.events.qsize()
-                            event = self.events.get()
+                            event = await self.events.get()
                             events_processed += 1
                             events_in_batch += 1
                             consecutive_errors = 0  # Reset error counter on success
+                            last_event_processed_time = current_time  # Update processing time
                             
                             # Reduce logging when queue is large to improve performance
                             if queue_size < 100:
                                 logger.debug('[%s] Processing event #%d, queue_size=%d, clients=%d' % 
                                             (time.strftime('%H:%M:%S'), events_processed, queue_size, len(self.clients)))
                             
-                            await self.send_event(event)
+                            # Add timeout for event sending to prevent infinite hangs
+                            send_start_time = time.time()
+                            try:
+                                await asyncio.wait_for(self.send_event(event), timeout=2.0)
+                                send_duration = time.time() - send_start_time
+                                if send_duration > 0.5:
+                                    logger.warning('[%s] Event send took %.3fs (slow!)' % 
+                                                  (time.strftime('%H:%M:%S'), send_duration))
+                            except asyncio.TimeoutError:
+                                logger.error('[%s] Timeout sending event #%d (took >2s, skipping)' % 
+                                            (time.strftime('%H:%M:%S'), events_processed))
+                                # Skip this event and continue
+                                continue
                             
                             # Log status every 100 events or when batch is complete
                             if events_processed % 100 == 0 or (events_in_batch >= batch_size and queue_size > 100):
-                                logger.info('[%s] Processed %d events, current queue_size=%d, clients=%d' % 
-                                           (time.strftime('%H:%M:%S'), events_processed, self.events.qsize(), len(self.clients)))
+                                loop_duration = time.time() - loop_entry_time
+                                logger.info('[%s] Processed %d events, current queue_size=%d, clients=%d, loop_time=%.2fs' % 
+                                           (time.strftime('%H:%M:%S'), events_processed, self.events.qsize(), len(self.clients), loop_duration))
                                 events_in_batch = 0
+                                loop_entry_time = time.time()  # Reset for next batch
                                 # Yield control briefly to prevent blocking
                                 await asyncio.sleep(0)
+                        
+                        # Log if we exit the inner loop
+                        if self.events.qsize() > 0 and self.running:
+                            logger.debug('[%s] Exiting inner event loop but queue not empty (size=%d), will retry' % 
+                                        (time.strftime('%H:%M:%S'), self.events.qsize()))
                         
                         except Exception as e:
                             consecutive_errors += 1
@@ -423,7 +486,7 @@ class SelkiesGamepad:
                     logger.error('[%s] Error in event processing loop: %s' % 
                                 (time.strftime('%H:%M:%S'), e), exc_info=True)
                     await asyncio.sleep(0.1)  # Brief pause before retrying
-                    continue
+                continue
         
         except Exception as e:
             logger.critical('[%s] Fatal error in event processing loop, stopping: %s' % 
@@ -439,8 +502,8 @@ class SelkiesGamepad:
                           (time.strftime('%H:%M:%S'), btn_num, btn_val))
             return
         try:
-            event = self.mapper.get_mapped_btn(btn_num, btn_val)
-            if event is not None:
+        event = self.mapper.get_mapped_btn(btn_num, btn_val)
+        if event is not None:
                 queue_size_before = self.events.qsize()
                 
                 # Prevent queue overflow: drop oldest events if queue is full
@@ -449,7 +512,7 @@ class SelkiesGamepad:
                     try:
                         self.events.get_nowait()  # Drop oldest event
                         dropped_events += 1
-                    except Empty:
+                    except asyncio.QueueEmpty:
                         # Queue is empty (shouldn't happen, but handle it)
                         break
                     except Exception as e:
@@ -461,7 +524,7 @@ class SelkiesGamepad:
                     logger.warning('[%s] Queue overflow: dropped %d old events, adding new button event (btn=%d, val=%d)' % 
                                   (time.strftime('%H:%M:%S'), dropped_events, btn_num, btn_val))
                 
-                self.events.put(event)
+                self.events.put_nowait(event)
                 queue_size_after = self.events.qsize()
                 
                 # Log warning if queue is getting large
@@ -481,8 +544,8 @@ class SelkiesGamepad:
                           (time.strftime('%H:%M:%S'), axis_num, axis_val))
             return
         try:
-            event = self.mapper.get_mapped_axis(axis_num, axis_val)
-            if event is not None:
+        event = self.mapper.get_mapped_axis(axis_num, axis_val)
+        if event is not None:
                 queue_size_before = self.events.qsize()
                 
                 # Prevent queue overflow: drop oldest events if queue is full
@@ -491,7 +554,7 @@ class SelkiesGamepad:
                     try:
                         self.events.get_nowait()  # Drop oldest event
                         dropped_events += 1
-                    except Empty:
+                    except asyncio.QueueEmpty:
                         # Queue is empty (shouldn't happen, but handle it)
                         break
                     except Exception as e:
@@ -503,7 +566,7 @@ class SelkiesGamepad:
                     logger.warning('[%s] Queue overflow: dropped %d old events, adding new axis event (axis=%d, val=%d)' % 
                                   (time.strftime('%H:%M:%S'), dropped_events, axis_num, axis_val))
                 
-                self.events.put(event)
+                self.events.put_nowait(event)
                 queue_size_after = self.events.qsize()
                 
                 # Log warning if queue is getting large
@@ -539,10 +602,16 @@ class SelkiesGamepad:
                     # Client was already removed
                     logger.debug("Client %d was already removed from clients dict" % fd)
                     continue
-                logger.debug("Sending event to client with fd: %d (total clients: %d)" % (fd, len(self.clients)))
-                # Use sock_sendall for non-blocking sockets
-                await loop.sock_sendall(client, event)
-                logger.debug("Successfully sent event to client %d" % fd)
+                            logger.debug('[%s] Sending event to client with fd: %d (total clients: %d)' % 
+                                        (time.strftime('%H:%M:%S'), fd, len(self.clients)))
+                # Use sock_sendall for non-blocking sockets with timeout
+                try:
+                    await asyncio.wait_for(loop.sock_sendall(client, event), timeout=1.0)
+                    logger.debug('[%s] Successfully sent event to client %d' % (time.strftime('%H:%M:%S'), fd))
+                except asyncio.TimeoutError:
+                    logger.error('[%s] Timeout sending event to client %d (socket may be blocked)' % 
+                                (time.strftime('%H:%M:%S'), fd))
+                    raise
             except (BrokenPipeError, ConnectionResetError, OSError) as e:
                 logger.warning("Client %d disconnected during event send: %s (remaining clients: %d)" % 
                               (fd, e, len(self.clients) - 1))
@@ -559,7 +628,7 @@ class SelkiesGamepad:
                 closed_clients.append(fd)
                 try:
                     if client:
-                        client.close()
+                client.close()
                 except:
                     pass
 
@@ -570,7 +639,7 @@ class SelkiesGamepad:
         for fd in closed_clients:
             try:
                 if fd in self.clients:
-                    del self.clients[fd]
+            del self.clients[fd]
             except Exception as e:
                 logger.error("Error removing client %d from clients dict: %s" % (fd, e))
 
@@ -633,9 +702,9 @@ class SelkiesGamepad:
                             (time.strftime('%H:%M:%S'), num_btns, num_axes, fd))
                 zero_start_time = time.time()
                 for btn_num in range(num_btns):
-                    self.send_btn(btn_num, 0)
+                self.send_btn(btn_num, 0)
                 for axis_num in range(num_axes):
-                    self.send_axis(axis_num, 0)
+                self.send_axis(axis_num, 0)
                 zero_duration = time.time() - zero_start_time
                 logger.debug('[%s] Zero values sent to client %d in %.3fs' % 
                             (time.strftime('%H:%M:%S'), fd, zero_duration))
@@ -660,7 +729,7 @@ class SelkiesGamepad:
                 fd = client.fileno()
                 if fd in self.clients:
                     del self.clients[fd]
-                client.close()
+            client.close()
             except:
                 pass
             raise
@@ -672,7 +741,7 @@ class SelkiesGamepad:
             if os.path.exists(self.socket_path):
                 logger.debug('[%s] Removing existing socket file: %s' % 
                             (time.strftime('%H:%M:%S'), self.socket_path))
-                os.unlink(self.socket_path)
+            os.unlink(self.socket_path)
                 logger.debug('[%s] Existing socket file removed' % time.strftime('%H:%M:%S'))
         except OSError as e:
             if os.path.exists(self.socket_path):
@@ -738,7 +807,7 @@ class SelkiesGamepad:
                 # Handle client connection with error handling to prevent server crash
                 connection_handle_start = time.time()
                 try:
-                    fd = client.fileno()
+                fd = client.fileno()
                     successful_connections += 1
                     logger.info('[%s] Client connected with fd: %d (total clients: %d, successful: %d/%d)' % 
                                (time.strftime('%H:%M:%S'), fd, len(self.clients) + 1, 
@@ -754,9 +823,9 @@ class SelkiesGamepad:
                     logger.info('[%s] Added client %d to clients dict (total: %d)' % 
                                (time.strftime('%H:%M:%S'), fd, len(self.clients)))
 
-                    # Send client the joystick configuration
+                # Send client the joystick configuration
                     setup_start = time.time()
-                    await self.setup_client(client)
+                await self.setup_client(client)
                     setup_duration = time.time() - setup_start
                     logger.info('[%s] Successfully set up client %d in %.3fs' % 
                                (time.strftime('%H:%M:%S'), fd, setup_duration))
@@ -790,7 +859,7 @@ class SelkiesGamepad:
             logger.info('[%s] Gamepad server shutting down...' % time.strftime('%H:%M:%S'))
             if self.server:
                 logger.debug('[%s] Closing server socket...' % time.strftime('%H:%M:%S'))
-                self.server.close()
+            self.server.close()
             try:
                 logger.debug('[%s] Removing socket file: %s' % (time.strftime('%H:%M:%S'), self.socket_path))
                 os.unlink(self.socket_path)
