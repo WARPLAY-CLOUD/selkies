@@ -354,12 +354,13 @@ class SelkiesGamepad:
         last_status_log_time = time.time()
         consecutive_errors = 0
         last_queue_check_time = time.time()
-        
+
         logger.info('[%s] Event processing loop started' % time.strftime('%H:%M:%S'))
-        
+
         try:
             while self.running:
                 try:
+                    # Check if queue is empty
                     if self.events.qsize() == 0:
                         await asyncio.sleep(0.001)
                         # Log status every 5 seconds when idle
@@ -369,130 +370,123 @@ class SelkiesGamepad:
                                         (time.strftime('%H:%M:%S'), len(self.clients), self.running))
                             last_status_log_time = current_time
                         continue
-                        
-                        # If queue is very large, process more aggressively
-                        queue_size = self.events.qsize()
-                        if queue_size > 500:
-                            logger.warning('[%s] Queue size is very large (%d), processing aggressively' % 
-                                        (time.strftime('%H:%M:%S'), queue_size))
-                            # Reduce sleep time when queue is large
-                            await asyncio.sleep(0)  # Yield immediately
-                        
-                        # Log warning if queue is not empty but not being processed
-                        current_time = time.time()
-                        queue_size = self.events.qsize()
-                        if current_time - last_queue_check_time >= 10.0 and queue_size > 0:
-                            logger.error('[%s] Queue not empty (size=%d) but events not being processed for >10s! '
-                                        'This indicates the processing loop may be stuck.' % 
-                                        (time.strftime('%H:%M:%S'), queue_size))
-                            # Log more diagnostic info
-                            logger.error('[%s] Diagnostic: running=%s, events_processed=%d, clients=%d' % 
-                                        (time.strftime('%H:%M:%S'), self.running, events_processed, len(self.clients)))
-                            last_queue_check_time = current_time
-                            # Try to force yield
-                            await asyncio.sleep(0)
-                        
-                        # Process events in batch for better performance when queue is large
-                        queue_size_start = self.events.qsize()
-                        batch_size = 10 if queue_size_start > 100 else 1
-                        events_in_batch = 0
-                        
-                        # Track when we last processed an event
-                        last_event_processed_time = time.time()
-                        loop_entry_time = time.time()
-                        
-                        logger.debug('[%s] Entering event processing loop: queue_size=%d, batch_size=%d' % 
-                                    (time.strftime('%H:%M:%S'), queue_size_start, batch_size))
-                        
-                        while self.running and self.events.qsize() > 0:
-                            try:
-                                # Check if we're stuck (no event processed in last 5 seconds)
-                                current_time = time.time()
-                                if current_time - last_event_processed_time > 5.0:
-                                    queue_size = self.events.qsize()
-                                    logger.error('[%s] Event processing appears stuck! Queue size: %d, '
-                                            'no events processed in last %.1fs' % 
-                                            (time.strftime('%H:%M:%S'), queue_size, 
-                                                current_time - last_event_processed_time))
-                                    # Try to recover by skipping current event
-                                    try:
-                                        self.events.get_nowait()  # Skip potentially problematic event
-                                    except asyncio.QueueEmpty:
-                                        pass
-                                    except Exception:
-                                        pass
-                                    last_event_processed_time = current_time
-                                    # Yield to allow other tasks to run
-                                    await asyncio.sleep(0.1)
-                                    continue
-                                
-                                queue_size = self.events.qsize()
-                                event = await self.events.get()
-                                events_processed += 1
-                                events_in_batch += 1
-                                consecutive_errors = 0  # Reset error counter on success
-                                last_event_processed_time = current_time  # Update processing time
-                                
-                                # Reduce logging when queue is large to improve performance
-                                if queue_size < 100:
-                                    logger.debug('[%s] Processing event #%d, queue_size=%d, clients=%d' % 
-                                                (time.strftime('%H:%M:%S'), events_processed, queue_size, len(self.clients)))
-                                
-                                # Add timeout for event sending to prevent infinite hangs
-                                send_start_time = time.time()
-                                try:
-                                    await asyncio.wait_for(self.send_event(event), timeout=2.0)
-                                    send_duration = time.time() - send_start_time
-                                    if send_duration > 0.5:
-                                        logger.warning('[%s] Event send took %.3fs (slow!)' % 
-                                                    (time.strftime('%H:%M:%S'), send_duration))
-                                except asyncio.TimeoutError:
-                                    logger.error('[%s] Timeout sending event #%d (took >2s, skipping)' % 
-                                                (time.strftime('%H:%M:%S'), events_processed))
-                                    # Skip this event and continue
-                                    continue
-                                
-                                # Log status every 100 events or when batch is complete
-                                if events_processed % 100 == 0 or (events_in_batch >= batch_size and queue_size > 100):
-                                    loop_duration = time.time() - loop_entry_time
-                                    logger.info('[%s] Processed %d events, current queue_size=%d, clients=%d, loop_time=%.2fs' % 
-                                            (time.strftime('%H:%M:%S'), events_processed, self.events.qsize(), len(self.clients), loop_duration))
-                                    events_in_batch = 0
-                                    loop_entry_time = time.time()  # Reset for next batch
-                                    # Yield control briefly to prevent blocking
-                                    await asyncio.sleep(0)
 
-                            except Exception as e:
-                                consecutive_errors += 1
-                                logger.error('[%s] Error processing event #%d: %s (consecutive errors: %d)' % 
-                                            (time.strftime('%H:%M:%S'), events_processed + 1, e, consecutive_errors), exc_info=True)
-                                
-                                # If too many consecutive errors, log warning but continue
-                                if consecutive_errors >= 10:
-                                    logger.error('[%s] Too many consecutive errors (%d), but continuing event processing' % 
-                                                (time.strftime('%H:%M:%S'), consecutive_errors))
-                                    consecutive_errors = 0  # Reset to avoid log spam
-                                
-                                # Continue processing next event even if current one failed
+                    # If queue is very large, process more aggressively
+                    queue_size = self.events.qsize()
+                    if queue_size > 500:
+                        logger.warning('[%s] Queue size is very large (%d), processing aggressively' %
+                                    (time.strftime('%H:%M:%S'), queue_size))
+                        # Reduce sleep time when queue is large
+                        await asyncio.sleep(0)  # Yield immediately
+
+                    # Log warning if queue is not empty but not being processed
+                    current_time = time.time()
+                    if current_time - last_queue_check_time >= 10.0 and queue_size > 0:
+                        logger.error('[%s] Queue not empty (size=%d) but events not being processed for >10s! '
+                                    'This indicates the processing loop may be stuck.' %
+                                    (time.strftime('%H:%M:%S'), queue_size))
+                        # Log more diagnostic info
+                        logger.error('[%s] Diagnostic: running=%s, events_processed=%d, clients=%d' %
+                                    (time.strftime('%H:%M:%S'), self.running, events_processed, len(self.clients)))
+                        last_queue_check_time = current_time
+                        # Try to force yield
+                        await asyncio.sleep(0)
+
+                    # Process events in batch for better performance when queue is large
+                    queue_size_start = self.events.qsize()
+                    batch_size = 10 if queue_size_start > 100 else 1
+                    events_in_batch = 0
+
+                    # Track when we last processed an event
+                    last_event_processed_time = time.time()
+                    loop_entry_time = time.time()
+
+                    logger.debug('[%s] Entering event processing loop: queue_size=%d, batch_size=%d' %
+                                (time.strftime('%H:%M:%S'), queue_size_start, batch_size))
+
+                    # Process batch of events
+                    while self.running and self.events.qsize() > 0 and events_in_batch < batch_size:
+                        try:
+                            # Check if we're stuck (no event processed in last 5 seconds)
+                            current_time = time.time()
+                            if current_time - last_event_processed_time > 5.0:
+                                queue_size = self.events.qsize()
+                                logger.error('[%s] Event processing appears stuck! Queue size: %d, '
+                                        'no events processed in last %.1fs' %
+                                        (time.strftime('%H:%M:%S'), queue_size,
+                                            current_time - last_event_processed_time))
+                                # Try to recover by skipping current event
+                                try:
+                                    self.events.get_nowait()  # Skip potentially problematic event
+                                except asyncio.QueueEmpty:
+                                    pass
+                                except Exception:
+                                    pass
+                                last_event_processed_time = current_time
+                                # Yield to allow other tasks to run
+                                await asyncio.sleep(0.1)
                                 continue
 
-                        # Log if we exit the inner loop
-                        if self.events.qsize() > 0 and self.running:
-                            logger.debug('[%s] Exiting inner event loop but queue not empty (size=%d), will retry' %
-                                        (time.strftime('%H:%M:%S'), self.events.qsize()))
+                            queue_size = self.events.qsize()
+                            event = await self.events.get()
+                            events_processed += 1
+                            events_in_batch += 1
+                            consecutive_errors = 0  # Reset error counter on success
+                            last_event_processed_time = current_time  # Update processing time
+
+                            # Reduce logging when queue is large to improve performance
+                            if queue_size < 100:
+                                logger.debug('[%s] Processing event #%d, queue_size=%d, clients=%d' %
+                                            (time.strftime('%H:%M:%S'), events_processed, queue_size, len(self.clients)))
+
+                            # Add timeout for event sending to prevent infinite hangs
+                            send_start_time = time.time()
+                            try:
+                                await asyncio.wait_for(self.send_event(event), timeout=2.0)
+                                send_duration = time.time() - send_start_time
+                                if send_duration > 0.5:
+                                    logger.warning('[%s] Event send took %.3fs (slow!)' %
+                                                (time.strftime('%H:%M:%S'), send_duration))
+                            except asyncio.TimeoutError:
+                                logger.error('[%s] Timeout sending event #%d (took >2s, skipping)' %
+                                            (time.strftime('%H:%M:%S'), events_processed))
+                                # Skip this event and continue
+                                continue
+
+                        except Exception as e:
+                            consecutive_errors += 1
+                            logger.error('[%s] Error processing event #%d: %s (consecutive errors: %d)' %
+                                        (time.strftime('%H:%M:%S'), events_processed + 1, e, consecutive_errors), exc_info=True)
+
+                            # If too many consecutive errors, log warning but continue
+                            if consecutive_errors >= 10:
+                                logger.error('[%s] Too many consecutive errors (%d), but continuing event processing' %
+                                            (time.strftime('%H:%M:%S'), consecutive_errors))
+                                consecutive_errors = 0  # Reset to avoid log spam
+
+                            # Continue processing next event even if current one failed
+                            continue
+
+                    # Log status after processing batch
+                    if events_in_batch > 0:
+                        loop_duration = time.time() - loop_entry_time
+                        logger.info('[%s] Processed %d events in batch, current queue_size=%d, clients=%d, batch_time=%.2fs' %
+                                (time.strftime('%H:%M:%S'), events_in_batch, self.events.qsize(), len(self.clients), loop_duration))
+
+                    # Yield control briefly to prevent blocking
+                    await asyncio.sleep(0)
 
                 except Exception as e:
                     logger.error('[%s] Error in event processing loop: %s' %
                                 (time.strftime('%H:%M:%S'), e), exc_info=True)
                     await asyncio.sleep(0.1)  # Brief pause before retrying
-                continue
-            
+
         except Exception as e:
-            logger.critical('[%s] Fatal error in event processing loop, stopping: %s' % 
+            logger.critical('[%s] Fatal error in event processing loop, stopping: %s' %
                            (time.strftime('%H:%M:%S'), e), exc_info=True)
             self.running = False
-        
-        logger.warning('[%s] Event processing loop stopped (processed %d events total)' % 
+
+        logger.warning('[%s] Event processing loop stopped (processed %d events total)' %
                       (time.strftime('%H:%M:%S'), events_processed))
 
     def send_btn(self, btn_num, btn_val):
