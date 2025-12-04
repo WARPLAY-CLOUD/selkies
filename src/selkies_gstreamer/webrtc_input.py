@@ -177,7 +177,7 @@ class WebRTCInput:
         # Create gamepad server if it doesn't exist
         js = self.js_map.get(js_num, None)
         if js is None:
-        js = SelkiesGamepad(socket_path)
+            js = SelkiesGamepad(socket_path)
             asyncio.create_task(js.run_server())
             self.js_map[js_num] = js
         
