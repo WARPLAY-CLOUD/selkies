@@ -59,10 +59,12 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 // Define the function signature for the original open and ioctl syscalls
 typedef int (*open_func_t)(const char *pathname, int flags, ...);
 typedef int (*ioctl_func_t)(int fd, unsigned long request, ...);
+typedef ssize_t (*read_func_t)(int fd, void *buf, size_t count);
 
 // Function pointers to the original open and ioctl syscalls
 static open_func_t real_open = NULL;
 static ioctl_func_t real_ioctl = NULL;
+static read_func_t real_read = NULL;
 
 // type definition for correction struct
 typedef struct js_corr js_corr_t;
@@ -153,6 +155,13 @@ void init_real_open()
     if (real_open != NULL)
         return;
     real_open = (open_func_t)dlsym(RTLD_NEXT, "open");
+}
+
+void init_real_read()
+{
+    if (real_read != NULL)
+        return;
+    real_read = (read_func_t)dlsym(RTLD_NEXT, "read");
 }
 
 int read_config(int fd, js_config_t *js_config)
@@ -384,4 +393,52 @@ int ioctl(int fd, unsigned long request, ...)
 
     // Handle other ioctl requests as needed
     return -ENOTTY; // Not a valid ioctl request for this character device emulation
+}
+
+// Interposer function for read syscall
+ssize_t read(int fd, void *buf, size_t count)
+{
+    // Initialize the real read if needed
+    if (real_read == NULL) {
+        init_real_read();
+        if (real_read == NULL) {
+            interposer_log(LOG_ERROR, "Error getting original read function: %s", dlerror());
+            errno = EIO;
+            return -1;
+        }
+    }
+
+    // Check if this fd belongs to an interposed joystick device/socket
+    js_interposer_t *interposer = NULL;
+    for (size_t i = 0; i < NUM_JS_INTERPOSERS; i++) {
+        if (fd == interposers[i].sockfd) {
+            interposer = &interposers[i];
+            break;
+        }
+    }
+
+    // If not our interposed device, forward to the real read()
+    if (interposer == NULL) {
+        return real_read(fd, buf, count);
+    }
+
+    // Read from the unix domain socket connected to the browser/frontend
+    size_t remaining = count;
+    char *ptr = (char*)buf;
+    while (remaining > 0) {
+        ssize_t r = real_read(interposer->sockfd, ptr, remaining);
+        if (r > 0) {
+            ptr += r;
+            remaining -= r;
+            if (remaining == 0) break;
+        } else if (r == 0) {
+            // EOF from socket
+            return count - remaining;
+        } else {
+            if (errno == EINTR) continue;
+            interposer_log(LOG_ERROR, "Read error on interposed socket: %s", strerror(errno));
+            return -1;
+        }
+    }
+    return count;
 }
