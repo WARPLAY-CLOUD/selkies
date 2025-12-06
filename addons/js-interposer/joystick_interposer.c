@@ -399,9 +399,11 @@ int ioctl(int fd, unsigned long request, ...)
 ssize_t read(int fd, void *buf, size_t count)
 {
     // Initialize the real read if needed
-    if (real_read == NULL) {
+    if (real_read == NULL)
+    {
         init_real_read();
-        if (real_read == NULL) {
+        if (real_read == NULL)
+        {
             interposer_log(LOG_ERROR, "Error getting original read function: %s", dlerror());
             errno = EIO;
             return -1;
@@ -410,35 +412,34 @@ ssize_t read(int fd, void *buf, size_t count)
 
     // Check if this fd belongs to an interposed joystick device/socket
     js_interposer_t *interposer = NULL;
-    for (size_t i = 0; i < NUM_JS_INTERPOSERS; i++) {
-        if (fd == interposers[i].sockfd) {
+    for (size_t i = 0; i < NUM_JS_INTERPOSERS; i++)
+    {
+        if (fd == interposers[i].sockfd)
+        {
             interposer = &interposers[i];
             break;
         }
     }
 
     // If not our interposed device, forward to the real read()
-    if (interposer == NULL) {
+    if (interposer == NULL)
+    {
         return real_read(fd, buf, count);
     }
 
-    // Read from the unix domain socket connected to the browser/frontend
-    size_t remaining = count;
-    char *ptr = (char*)buf;
-    while (remaining > 0) {
-        ssize_t r = real_read(interposer->sockfd, ptr, remaining);
-        if (r > 0) {
-            ptr += r;
-            remaining -= r;
-            if (remaining == 0) break;
-        } else if (r == 0) {
-            // EOF from socket
-            return count - remaining;
-        } else {
-            if (errno == EINTR) continue;
-            interposer_log(LOG_ERROR, "Read error on interposed socket: %s", strerror(errno));
-            return -1;
-        }
+    // For interposed devices: perform a single read and return immediately.
+    // This avoids blocking until the caller's buffer is fully filled (Firefox may
+    // request large buffers but expect partial reads as events arrive).
+    ssize_t r;
+    do
+    {
+        r = real_read(fd, buf, count);
+    } while (r == -1 && errno == EINTR);
+
+    if (r == -1 && errno != EAGAIN)
+    {
+        interposer_log(LOG_ERROR, "Read error on interposed socket: %s", strerror(errno));
     }
-    return count;
+
+    return r;
 }
