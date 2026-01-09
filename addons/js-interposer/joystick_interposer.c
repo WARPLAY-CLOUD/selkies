@@ -31,6 +31,7 @@ file, You can obtain one at https://mozilla.org/MPL/2.0/.
 #include <fcntl.h>
 #include <string.h>
 #include <stdint.h>
+#include <stdlib.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <sys/un.h>
@@ -230,7 +231,7 @@ int open(const char *pathname, int flags, ...)
     init_real_open();
     if (real_open == NULL)
     {
-        interposer_log("Error getting original open function: %s", dlerror());
+        interposer_log(LOG_ERROR, "Error getting original open function: %s", dlerror());
         return -1;
     }
 
@@ -248,11 +249,15 @@ int open(const char *pathname, int flags, ...)
     // Call real open function if interposer was not found.
     if (interposer == NULL)
     {
-        va_list args;
-        va_start(args, flags);
-        mode_t mode = va_arg(args, mode_t);
-        va_end(args);
-        return real_open(pathname, flags, mode);
+        if (flags & O_CREAT)
+        {
+            va_list args;
+            va_start(args, flags);
+            mode_t mode = va_arg(args, mode_t);
+            va_end(args);
+            return real_open(pathname, flags, mode);
+        }
+        return real_open(pathname, flags);
     }
 
     interposer_log(LOG_INFO, "Intercepted open call for %s", interposer->open_dev_name);
@@ -377,9 +382,11 @@ int ioctl(int fd, unsigned long request, ...)
     case 0x13: /* JSIOCGNAME(len) get identifier string */
         interposer_log(LOG_INFO, "Intercepted ioctl request %lu -> JSIOCGNAME", request);
         char *name = va_arg(args, char *);
-        size_t *len = va_arg(args, size_t *);
-        strncpy(name, interposer->js_config.name, strlen(interposer->js_config.name));
-        name[strlen(interposer->js_config.name)] = '\0';
+        size_t len = _IOC_SIZE(request);
+        if (len == 0)
+            len = sizeof(interposer->js_config.name);
+        strncpy(name, interposer->js_config.name, len - 1);
+        name[len - 1] = '\0';
 
         va_end(args);
         return 0; // 0 indicates success

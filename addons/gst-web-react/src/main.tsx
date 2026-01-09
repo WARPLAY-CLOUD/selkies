@@ -1,7 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import App from './App';
-import { getConnectionConfig, ConnectionConfig } from './config';
+import { getConnectionConfig } from './config';
 import './index.css';
 
 const config = getConnectionConfig();

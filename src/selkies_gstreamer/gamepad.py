@@ -7,6 +7,7 @@ import os
 import struct
 import socket
 import time
+import fcntl
 from input_event_codes import *
 from signal import (
     signal,
@@ -114,6 +115,41 @@ MAX_AXES = 64
 # Range for axis values
 ABS_MIN = -32767
 ABS_MAX = 32767
+
+UINPUT_MAX_NAME_SIZE = 80
+ABS_CNT = 0x40
+UINPUT_IOCTL_BASE = ord('U')
+IOC_NRBITS = 8
+IOC_TYPEBITS = 8
+IOC_SIZEBITS = 14
+IOC_DIRBITS = 2
+IOC_NRSHIFT = 0
+IOC_TYPESHIFT = IOC_NRSHIFT + IOC_NRBITS
+IOC_SIZESHIFT = IOC_TYPESHIFT + IOC_TYPEBITS
+IOC_DIRSHIFT = IOC_SIZESHIFT + IOC_SIZEBITS
+IOC_WRITE = 1
+
+def _IOC(dir, type, nr, size):
+    return (dir << IOC_DIRSHIFT) | (type << IOC_TYPESHIFT) | (nr << IOC_NRSHIFT) | (size << IOC_SIZESHIFT)
+
+def _IO(type, nr):
+    return _IOC(0, type, nr, 0)
+
+def _IOW(type, nr, size):
+    return _IOC(IOC_WRITE, type, nr, size)
+
+UI_SET_EVBIT = _IOW(UINPUT_IOCTL_BASE, 100, 4)
+UI_SET_KEYBIT = _IOW(UINPUT_IOCTL_BASE, 101, 4)
+UI_SET_ABSBIT = _IOW(UINPUT_IOCTL_BASE, 103, 4)
+UI_DEV_CREATE = _IO(UINPUT_IOCTL_BASE, 1)
+UI_DEV_DESTROY = _IO(UINPUT_IOCTL_BASE, 2)
+
+HAT_AXES = {
+    ABS_HAT0X, ABS_HAT0Y,
+    ABS_HAT1X, ABS_HAT1Y,
+    ABS_HAT2X, ABS_HAT2Y,
+    ABS_HAT3X, ABS_HAT3Y
+}
 
 # Joystick event struct
 # https://www.kernel.org/doc/Documentation/input/joystick-api.txt
@@ -268,9 +304,86 @@ def normalize_axis_val_from_255(val):
     return normalized
 
 
+class UInputGamepad:
+    def __init__(self, uinput_path, config, name):
+        self.uinput_path = uinput_path
+        self.config = config
+        self.name = name
+        self.fd = None
+
+        self._open_device()
+        self._setup_device()
+
+    def _open_device(self):
+        self.fd = os.open(self.uinput_path, os.O_WRONLY | os.O_NONBLOCK)
+
+    def _setup_device(self):
+        fcntl.ioctl(self.fd, UI_SET_EVBIT, EV_KEY)
+        fcntl.ioctl(self.fd, UI_SET_EVBIT, EV_ABS)
+
+        for code in self.config["btn_map"]:
+            fcntl.ioctl(self.fd, UI_SET_KEYBIT, code)
+
+        for code in self.config["axes_map"]:
+            fcntl.ioctl(self.fd, UI_SET_ABSBIT, code)
+
+        absmax = [0] * ABS_CNT
+        absmin = [0] * ABS_CNT
+        absfuzz = [0] * ABS_CNT
+        absflat = [0] * ABS_CNT
+
+        for code in self.config["axes_map"]:
+            if code in HAT_AXES:
+                absmin[code] = -1
+                absmax[code] = 1
+            else:
+                absmin[code] = ABS_MIN
+                absmax[code] = ABS_MAX
+
+        name_bytes = self.name.encode()[:UINPUT_MAX_NAME_SIZE]
+        name_padded = name_bytes + (b'\x00' * (UINPUT_MAX_NAME_SIZE - len(name_bytes)))
+        dev = struct.pack(
+            "80sHHHHI" + ("i" * ABS_CNT * 4),
+            name_padded,
+            0x03,  # BUS_USB
+            0x0001,
+            0x0001,
+            0x0001,
+            0,
+            *absmax,
+            *absmin,
+            *absfuzz,
+            *absflat
+        )
+
+        os.write(self.fd, dev)
+        fcntl.ioctl(self.fd, UI_DEV_CREATE)
+
+    def send_event(self, ev_type, ev_code, ev_value):
+        now = time.time()
+        sec = int(now)
+        usec = int((now - sec) * 1000000)
+        data = struct.pack("llHHi", sec, usec, ev_type, ev_code, int(ev_value))
+        os.write(self.fd, data)
+        syn = struct.pack("llHHi", sec, usec, EV_SYN, SYN_REPORT, 0)
+        os.write(self.fd, syn)
+
+    def close(self):
+        if self.fd is None:
+            return
+        try:
+            fcntl.ioctl(self.fd, UI_DEV_DESTROY)
+        finally:
+            os.close(self.fd)
+            self.fd = None
+
+
 class SelkiesGamepad:
-    def __init__(self, socket_path):
+    def __init__(self, socket_path, enable_uinput=False, uinput_device="/dev/uinput"):
         self.socket_path = socket_path
+        self.enable_uinput = enable_uinput
+        self.uinput_device = uinput_device
+        self.uinput = None
 
         # Gamepad input mapper instance
         # created when calling set_config()
@@ -301,6 +414,13 @@ class SelkiesGamepad:
         logger.debug('[%s] Gamepad config detected, creating mapper...' % time.strftime('%H:%M:%S'))
         self.mapper = GamepadMapper(self.config, name, num_btns, num_axes)
         logger.info('[%s] Config set successfully, mapper created' % time.strftime('%H:%M:%S'))
+
+        if self.enable_uinput and self.uinput is None:
+            try:
+                self.uinput = UInputGamepad(self.uinput_device, self.config, name)
+                logger.info('[%s] UInput gamepad created at %s' % (time.strftime('%H:%M:%S'), self.uinput_device))
+            except Exception as e:
+                logger.error('[%s] Failed to create UInput gamepad: %s' % (time.strftime('%H:%M:%S'), e), exc_info=True)
         
         # Send config to any clients that are already connected
         if self.clients:
@@ -497,6 +617,10 @@ class SelkiesGamepad:
         try:
             event = self.mapper.get_mapped_btn(btn_num, btn_val)
             if event is not None:
+                if self.uinput:
+                    uinput_event = self.mapper.get_mapped_btn_evdev(btn_num, btn_val)
+                    if uinput_event:
+                        self.uinput.send_event(*uinput_event)
                 queue_size_before = self.events.qsize()
                 
                 # Prevent queue overflow: drop oldest events if queue is full
@@ -539,6 +663,10 @@ class SelkiesGamepad:
         try:
             event = self.mapper.get_mapped_axis(axis_num, axis_val)
             if event is not None:
+                if self.uinput:
+                    uinput_event = self.mapper.get_mapped_axis_evdev(axis_num, axis_val)
+                    if uinput_event:
+                        self.uinput.send_event(*uinput_event)
                 queue_size_before = self.events.qsize()
                 
                 # Prevent queue overflow: drop oldest events if queue is full
@@ -865,6 +993,12 @@ class SelkiesGamepad:
     def stop_server(self):
         self.running = False
         self.server.close()
+        if self.uinput:
+            try:
+                self.uinput.close()
+            except Exception as e:
+                logger.warning('[%s] Error closing uinput device: %s' % (time.strftime('%H:%M:%S'), e))
+            self.uinput = None
         try:
             os.unlink(self.socket_path)
         except:
@@ -937,3 +1071,41 @@ class GamepadMapper:
             logger.error('[%s] Failed to create axis event for axis %d (mapped=%d) with value %d: %s' % 
                         (time.strftime('%H:%M:%S'), axis_num, mapped_axis, normalized_val, e), exc_info=True)
             return None
+
+    def get_mapped_btn_evdev(self, btn_num, btn_val):
+        axis_num = None
+        axis_sign = 1
+        for axis, mapping in self.config["mapping"]["axes_to_btn"].items():
+            if btn_num in mapping:
+                axis_num = axis
+                if len(mapping) > 1:
+                    axis_sign = 1 if mapping[0] == btn_num else -1
+                break
+
+        if axis_num is not None:
+            axis_val = normalize_axis_val(btn_val * axis_sign)
+            if axis_num in self.config["mapping"]["trigger_axes"]:
+                axis_val = normalize_trigger_val(btn_val)
+            if axis_num >= len(self.config["axes_map"]):
+                return None
+            axis_code = self.config["axes_map"][axis_num]
+            return (EV_ABS, axis_code, axis_val)
+
+        mapped_btn = self.config["mapping"]["btns"].get(btn_num, btn_num)
+        if mapped_btn >= len(self.config["btn_map"]):
+            return None
+        btn_code = self.config["btn_map"][mapped_btn]
+        btn_state = 1 if btn_val else 0
+        return (EV_KEY, btn_code, btn_state)
+
+    def get_mapped_axis_evdev(self, axis_num, axis_val):
+        if axis_val < 0 or axis_val > 255:
+            axis_val = max(0, min(255, axis_val))
+
+        mapped_axis = self.config["mapping"]["axes"].get(axis_num, axis_num)
+        if mapped_axis >= len(self.config["axes_map"]):
+            return None
+
+        axis_code = self.config["axes_map"][mapped_axis]
+        normalized_val = normalize_axis_val_from_255(axis_val)
+        return (EV_ABS, axis_code, normalized_val)

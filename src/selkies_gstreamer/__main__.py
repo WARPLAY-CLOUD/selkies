@@ -458,6 +458,12 @@ async def main():
     parser.add_argument('--js_socket_path',
                         default=os.environ.get('SELKIES_JS_SOCKET_PATH', '/tmp'),
                         help='Directory to write the Selkies Joystick Interposer communication sockets to, default: /tmp, results in socket files: /tmp/selkies_js{0-3}.sock')
+    parser.add_argument('--enable_uinput_gamepad',
+                        default=os.environ.get('SELKIES_ENABLE_UINPUT_GAMEPAD', 'true'),
+                        help='Enable uinput gamepad device for browser Gamepad API inside the session')
+    parser.add_argument('--uinput_device',
+                        default=os.environ.get('SELKIES_UINPUT_DEVICE', '/dev/uinput'),
+                        help='Path to the uinput device, default: /dev/uinput')
     parser.add_argument('--encoder',
                         default=os.environ.get('SELKIES_ENCODER', 'x264enc'),
                         help='GStreamer video encoder to use')
@@ -667,6 +673,7 @@ async def main():
     enable_cursors = args.enable_cursors.lower() == "true"
     cursor_debug = args.debug_cursors.lower() == "true"
     cursor_size = int(args.cursor_size)
+    enable_uinput_gamepad = args.enable_uinput_gamepad.lower() == "true"
     keyframe_distance = float(args.keyframe_distance)
     congestion_control = args.congestion_control.lower() == "true"
     video_packetloss_percent = float(args.video_packetloss_percent)
@@ -729,7 +736,9 @@ async def main():
         enable_cursors,
         cursor_size,
         cursor_scale,
-        cursor_debug)
+        cursor_debug,
+        enable_uinput_gamepad,
+        args.uinput_device)
 
     # Handle changed cursors
     webrtc_input.on_cursor_change = lambda data: app.send_cursor_data(data)

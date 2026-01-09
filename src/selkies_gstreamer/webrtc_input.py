@@ -80,13 +80,15 @@ class WebRTCInputError(Exception):
 
 
 class WebRTCInput:
-    def __init__(self, uinput_mouse_socket_path="", js_socket_path="", enable_clipboard="", enable_cursors=True, cursor_size=16, cursor_scale=1.0, cursor_debug=False):
+    def __init__(self, uinput_mouse_socket_path="", js_socket_path="", enable_clipboard="", enable_cursors=True, cursor_size=16, cursor_scale=1.0, cursor_debug=False, enable_uinput_gamepad=False, uinput_device="/dev/uinput"):
         """Initializes WebRTC input instance
         """
 
         self.clipboard_running = False
         self.uinput_mouse_socket_path = uinput_mouse_socket_path
         self.uinput_mouse_socket = None
+        self.enable_uinput_gamepad = enable_uinput_gamepad
+        self.uinput_device = uinput_device
 
         # Map of gamepad numbers to socket paths
         self.js_socket_path_map = {i: os.path.join(js_socket_path, "selkies_js%d.sock" % i) for i in range(4)}
@@ -177,7 +179,7 @@ class WebRTCInput:
         # Create gamepad server if it doesn't exist
         js = self.js_map.get(js_num, None)
         if js is None:
-            js = SelkiesGamepad(socket_path)
+            js = SelkiesGamepad(socket_path, self.enable_uinput_gamepad, self.uinput_device)
             asyncio.create_task(js.run_server())
             self.js_map[js_num] = js
         

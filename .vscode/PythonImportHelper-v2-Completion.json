@@ -79,6 +79,15 @@
         "documentation": {}
     },
     {
+        "label": "fcntl",
+        "kind": 6,
+        "isExtraImport": true,
+        "importPath": "fcntl",
+        "description": "fcntl",
+        "detail": "fcntl",
+        "documentation": {}
+    },
+    {
         "label": "*",
         "importPath": "input_event_codes",
         "description": "input_event_codes",
@@ -1383,11 +1392,20 @@
         "documentation": {}
     },
     {
+        "label": "UInputGamepad",
+        "kind": 6,
+        "importPath": "src.selkies_gstreamer.gamepad",
+        "description": "src.selkies_gstreamer.gamepad",
+        "peekOfCode": "class UInputGamepad:\n    def __init__(self, uinput_path, config, name):\n        self.uinput_path = uinput_path\n        self.config = config\n        self.name = name\n        self.fd = None\n        self._open_device()\n        self._setup_device()\n    def _open_device(self):\n        self.fd = os.open(self.uinput_path, os.O_WRONLY | os.O_NONBLOCK)",
+        "detail": "src.selkies_gstreamer.gamepad",
+        "documentation": {}
+    },
+    {
         "label": "SelkiesGamepad",
         "kind": 6,
         "importPath": "src.selkies_gstreamer.gamepad",
         "description": "src.selkies_gstreamer.gamepad",
-        "peekOfCode": "class SelkiesGamepad:\n    def __init__(self, socket_path):\n        self.socket_path = socket_path\n        # Gamepad input mapper instance\n        # created when calling set_config()\n        self.mapper = None\n        self.name = None\n        # socket server\n        self.server = None\n        # Joystick config, set dynamically.",
+        "peekOfCode": "class SelkiesGamepad:\n    def __init__(self, socket_path, enable_uinput=False, uinput_device=\"/dev/uinput\"):\n        self.socket_path = socket_path\n        self.enable_uinput = enable_uinput\n        self.uinput_device = uinput_device\n        self.uinput = None\n        # Gamepad input mapper instance\n        # created when calling set_config()\n        self.mapper = None\n        self.name = None",
         "detail": "src.selkies_gstreamer.gamepad",
         "documentation": {}
     },
@@ -1504,7 +1522,7 @@
         "kind": 5,
         "importPath": "src.selkies_gstreamer.gamepad",
         "description": "src.selkies_gstreamer.gamepad",
-        "peekOfCode": "JS_EVENT_BUTTON = 0x01\nJS_EVENT_AXIS = 0x02\n# Max num of buttons and axes\nMAX_BTNS = 512\nMAX_AXES = 64\n# Range for axis values\nABS_MIN = -32767\nABS_MAX = 32767\n# Joystick event struct\n# https://www.kernel.org/doc/Documentation/input/joystick-api.txt",
+        "peekOfCode": "JS_EVENT_BUTTON = 0x01\nJS_EVENT_AXIS = 0x02\n# Max num of buttons and axes\nMAX_BTNS = 512\nMAX_AXES = 64\n# Range for axis values\nABS_MIN = -32767\nABS_MAX = 32767\nUINPUT_MAX_NAME_SIZE = 80\nABS_CNT = 0x40",
         "detail": "src.selkies_gstreamer.gamepad",
         "documentation": {}
     },
@@ -1513,7 +1531,7 @@
         "kind": 5,
         "importPath": "src.selkies_gstreamer.gamepad",
         "description": "src.selkies_gstreamer.gamepad",
-        "peekOfCode": "JS_EVENT_AXIS = 0x02\n# Max num of buttons and axes\nMAX_BTNS = 512\nMAX_AXES = 64\n# Range for axis values\nABS_MIN = -32767\nABS_MAX = 32767\n# Joystick event struct\n# https://www.kernel.org/doc/Documentation/input/joystick-api.txt\n# struct js_event {",
+        "peekOfCode": "JS_EVENT_AXIS = 0x02\n# Max num of buttons and axes\nMAX_BTNS = 512\nMAX_AXES = 64\n# Range for axis values\nABS_MIN = -32767\nABS_MAX = 32767\nUINPUT_MAX_NAME_SIZE = 80\nABS_CNT = 0x40\nUINPUT_IOCTL_BASE = ord('U')",
         "detail": "src.selkies_gstreamer.gamepad",
         "documentation": {}
     },
@@ -1522,7 +1540,7 @@
         "kind": 5,
         "importPath": "src.selkies_gstreamer.gamepad",
         "description": "src.selkies_gstreamer.gamepad",
-        "peekOfCode": "MAX_BTNS = 512\nMAX_AXES = 64\n# Range for axis values\nABS_MIN = -32767\nABS_MAX = 32767\n# Joystick event struct\n# https://www.kernel.org/doc/Documentation/input/joystick-api.txt\n# struct js_event {\n#    __u32 time;     /* event timestamp in milliseconds */\n#    __s16 value;    /* value */",
+        "peekOfCode": "MAX_BTNS = 512\nMAX_AXES = 64\n# Range for axis values\nABS_MIN = -32767\nABS_MAX = 32767\nUINPUT_MAX_NAME_SIZE = 80\nABS_CNT = 0x40\nUINPUT_IOCTL_BASE = ord('U')\nIOC_NRBITS = 8\nIOC_TYPEBITS = 8",
         "detail": "src.selkies_gstreamer.gamepad",
         "documentation": {}
     },
@@ -1531,7 +1549,7 @@
         "kind": 5,
         "importPath": "src.selkies_gstreamer.gamepad",
         "description": "src.selkies_gstreamer.gamepad",
-        "peekOfCode": "MAX_AXES = 64\n# Range for axis values\nABS_MIN = -32767\nABS_MAX = 32767\n# Joystick event struct\n# https://www.kernel.org/doc/Documentation/input/joystick-api.txt\n# struct js_event {\n#    __u32 time;     /* event timestamp in milliseconds */\n#    __s16 value;    /* value */\n#    __u8 type;      /* event type */",
+        "peekOfCode": "MAX_AXES = 64\n# Range for axis values\nABS_MIN = -32767\nABS_MAX = 32767\nUINPUT_MAX_NAME_SIZE = 80\nABS_CNT = 0x40\nUINPUT_IOCTL_BASE = ord('U')\nIOC_NRBITS = 8\nIOC_TYPEBITS = 8\nIOC_SIZEBITS = 14",
         "detail": "src.selkies_gstreamer.gamepad",
         "documentation": {}
     },
@@ -1540,7 +1558,7 @@
         "kind": 5,
         "importPath": "src.selkies_gstreamer.gamepad",
         "description": "src.selkies_gstreamer.gamepad",
-        "peekOfCode": "ABS_MIN = -32767\nABS_MAX = 32767\n# Joystick event struct\n# https://www.kernel.org/doc/Documentation/input/joystick-api.txt\n# struct js_event {\n#    __u32 time;     /* event timestamp in milliseconds */\n#    __s16 value;    /* value */\n#    __u8 type;      /* event type */\n#    __u8 number;    /* axis/button number */\n# };",
+        "peekOfCode": "ABS_MIN = -32767\nABS_MAX = 32767\nUINPUT_MAX_NAME_SIZE = 80\nABS_CNT = 0x40\nUINPUT_IOCTL_BASE = ord('U')\nIOC_NRBITS = 8\nIOC_TYPEBITS = 8\nIOC_SIZEBITS = 14\nIOC_DIRBITS = 2\nIOC_NRSHIFT = 0",
         "detail": "src.selkies_gstreamer.gamepad",
         "documentation": {}
     },
@@ -1549,7 +1567,169 @@
         "kind": 5,
         "importPath": "src.selkies_gstreamer.gamepad",
         "description": "src.selkies_gstreamer.gamepad",
-        "peekOfCode": "ABS_MAX = 32767\n# Joystick event struct\n# https://www.kernel.org/doc/Documentation/input/joystick-api.txt\n# struct js_event {\n#    __u32 time;     /* event timestamp in milliseconds */\n#    __s16 value;    /* value */\n#    __u8 type;      /* event type */\n#    __u8 number;    /* axis/button number */\n# };\ndef get_btn_event(btn_num, btn_val):",
+        "peekOfCode": "ABS_MAX = 32767\nUINPUT_MAX_NAME_SIZE = 80\nABS_CNT = 0x40\nUINPUT_IOCTL_BASE = ord('U')\nIOC_NRBITS = 8\nIOC_TYPEBITS = 8\nIOC_SIZEBITS = 14\nIOC_DIRBITS = 2\nIOC_NRSHIFT = 0\nIOC_TYPESHIFT = IOC_NRSHIFT + IOC_NRBITS",
+        "detail": "src.selkies_gstreamer.gamepad",
+        "documentation": {}
+    },
+    {
+        "label": "UINPUT_MAX_NAME_SIZE",
+        "kind": 5,
+        "importPath": "src.selkies_gstreamer.gamepad",
+        "description": "src.selkies_gstreamer.gamepad",
+        "peekOfCode": "UINPUT_MAX_NAME_SIZE = 80\nABS_CNT = 0x40\nUINPUT_IOCTL_BASE = ord('U')\nIOC_NRBITS = 8\nIOC_TYPEBITS = 8\nIOC_SIZEBITS = 14\nIOC_DIRBITS = 2\nIOC_NRSHIFT = 0\nIOC_TYPESHIFT = IOC_NRSHIFT + IOC_NRBITS\nIOC_SIZESHIFT = IOC_TYPESHIFT + IOC_TYPEBITS",
+        "detail": "src.selkies_gstreamer.gamepad",
+        "documentation": {}
+    },
+    {
+        "label": "ABS_CNT",
+        "kind": 5,
+        "importPath": "src.selkies_gstreamer.gamepad",
+        "description": "src.selkies_gstreamer.gamepad",
+        "peekOfCode": "ABS_CNT = 0x40\nUINPUT_IOCTL_BASE = ord('U')\nIOC_NRBITS = 8\nIOC_TYPEBITS = 8\nIOC_SIZEBITS = 14\nIOC_DIRBITS = 2\nIOC_NRSHIFT = 0\nIOC_TYPESHIFT = IOC_NRSHIFT + IOC_NRBITS\nIOC_SIZESHIFT = IOC_TYPESHIFT + IOC_TYPEBITS\nIOC_DIRSHIFT = IOC_SIZESHIFT + IOC_SIZEBITS",
+        "detail": "src.selkies_gstreamer.gamepad",
+        "documentation": {}
+    },
+    {
+        "label": "UINPUT_IOCTL_BASE",
+        "kind": 5,
+        "importPath": "src.selkies_gstreamer.gamepad",
+        "description": "src.selkies_gstreamer.gamepad",
+        "peekOfCode": "UINPUT_IOCTL_BASE = ord('U')\nIOC_NRBITS = 8\nIOC_TYPEBITS = 8\nIOC_SIZEBITS = 14\nIOC_DIRBITS = 2\nIOC_NRSHIFT = 0\nIOC_TYPESHIFT = IOC_NRSHIFT + IOC_NRBITS\nIOC_SIZESHIFT = IOC_TYPESHIFT + IOC_TYPEBITS\nIOC_DIRSHIFT = IOC_SIZESHIFT + IOC_SIZEBITS\nIOC_WRITE = 1",
+        "detail": "src.selkies_gstreamer.gamepad",
+        "documentation": {}
+    },
+    {
+        "label": "IOC_NRBITS",
+        "kind": 5,
+        "importPath": "src.selkies_gstreamer.gamepad",
+        "description": "src.selkies_gstreamer.gamepad",
+        "peekOfCode": "IOC_NRBITS = 8\nIOC_TYPEBITS = 8\nIOC_SIZEBITS = 14\nIOC_DIRBITS = 2\nIOC_NRSHIFT = 0\nIOC_TYPESHIFT = IOC_NRSHIFT + IOC_NRBITS\nIOC_SIZESHIFT = IOC_TYPESHIFT + IOC_TYPEBITS\nIOC_DIRSHIFT = IOC_SIZESHIFT + IOC_SIZEBITS\nIOC_WRITE = 1\ndef _IOC(dir, type, nr, size):",
+        "detail": "src.selkies_gstreamer.gamepad",
+        "documentation": {}
+    },
+    {
+        "label": "IOC_TYPEBITS",
+        "kind": 5,
+        "importPath": "src.selkies_gstreamer.gamepad",
+        "description": "src.selkies_gstreamer.gamepad",
+        "peekOfCode": "IOC_TYPEBITS = 8\nIOC_SIZEBITS = 14\nIOC_DIRBITS = 2\nIOC_NRSHIFT = 0\nIOC_TYPESHIFT = IOC_NRSHIFT + IOC_NRBITS\nIOC_SIZESHIFT = IOC_TYPESHIFT + IOC_TYPEBITS\nIOC_DIRSHIFT = IOC_SIZESHIFT + IOC_SIZEBITS\nIOC_WRITE = 1\ndef _IOC(dir, type, nr, size):\n    return (dir << IOC_DIRSHIFT) | (type << IOC_TYPESHIFT) | (nr << IOC_NRSHIFT) | (size << IOC_SIZESHIFT)",
+        "detail": "src.selkies_gstreamer.gamepad",
+        "documentation": {}
+    },
+    {
+        "label": "IOC_SIZEBITS",
+        "kind": 5,
+        "importPath": "src.selkies_gstreamer.gamepad",
+        "description": "src.selkies_gstreamer.gamepad",
+        "peekOfCode": "IOC_SIZEBITS = 14\nIOC_DIRBITS = 2\nIOC_NRSHIFT = 0\nIOC_TYPESHIFT = IOC_NRSHIFT + IOC_NRBITS\nIOC_SIZESHIFT = IOC_TYPESHIFT + IOC_TYPEBITS\nIOC_DIRSHIFT = IOC_SIZESHIFT + IOC_SIZEBITS\nIOC_WRITE = 1\ndef _IOC(dir, type, nr, size):\n    return (dir << IOC_DIRSHIFT) | (type << IOC_TYPESHIFT) | (nr << IOC_NRSHIFT) | (size << IOC_SIZESHIFT)\ndef _IO(type, nr):",
+        "detail": "src.selkies_gstreamer.gamepad",
+        "documentation": {}
+    },
+    {
+        "label": "IOC_DIRBITS",
+        "kind": 5,
+        "importPath": "src.selkies_gstreamer.gamepad",
+        "description": "src.selkies_gstreamer.gamepad",
+        "peekOfCode": "IOC_DIRBITS = 2\nIOC_NRSHIFT = 0\nIOC_TYPESHIFT = IOC_NRSHIFT + IOC_NRBITS\nIOC_SIZESHIFT = IOC_TYPESHIFT + IOC_TYPEBITS\nIOC_DIRSHIFT = IOC_SIZESHIFT + IOC_SIZEBITS\nIOC_WRITE = 1\ndef _IOC(dir, type, nr, size):\n    return (dir << IOC_DIRSHIFT) | (type << IOC_TYPESHIFT) | (nr << IOC_NRSHIFT) | (size << IOC_SIZESHIFT)\ndef _IO(type, nr):\n    return _IOC(0, type, nr, 0)",
+        "detail": "src.selkies_gstreamer.gamepad",
+        "documentation": {}
+    },
+    {
+        "label": "IOC_NRSHIFT",
+        "kind": 5,
+        "importPath": "src.selkies_gstreamer.gamepad",
+        "description": "src.selkies_gstreamer.gamepad",
+        "peekOfCode": "IOC_NRSHIFT = 0\nIOC_TYPESHIFT = IOC_NRSHIFT + IOC_NRBITS\nIOC_SIZESHIFT = IOC_TYPESHIFT + IOC_TYPEBITS\nIOC_DIRSHIFT = IOC_SIZESHIFT + IOC_SIZEBITS\nIOC_WRITE = 1\ndef _IOC(dir, type, nr, size):\n    return (dir << IOC_DIRSHIFT) | (type << IOC_TYPESHIFT) | (nr << IOC_NRSHIFT) | (size << IOC_SIZESHIFT)\ndef _IO(type, nr):\n    return _IOC(0, type, nr, 0)\ndef _IOW(type, nr, size):",
+        "detail": "src.selkies_gstreamer.gamepad",
+        "documentation": {}
+    },
+    {
+        "label": "IOC_TYPESHIFT",
+        "kind": 5,
+        "importPath": "src.selkies_gstreamer.gamepad",
+        "description": "src.selkies_gstreamer.gamepad",
+        "peekOfCode": "IOC_TYPESHIFT = IOC_NRSHIFT + IOC_NRBITS\nIOC_SIZESHIFT = IOC_TYPESHIFT + IOC_TYPEBITS\nIOC_DIRSHIFT = IOC_SIZESHIFT + IOC_SIZEBITS\nIOC_WRITE = 1\ndef _IOC(dir, type, nr, size):\n    return (dir << IOC_DIRSHIFT) | (type << IOC_TYPESHIFT) | (nr << IOC_NRSHIFT) | (size << IOC_SIZESHIFT)\ndef _IO(type, nr):\n    return _IOC(0, type, nr, 0)\ndef _IOW(type, nr, size):\n    return _IOC(IOC_WRITE, type, nr, size)",
+        "detail": "src.selkies_gstreamer.gamepad",
+        "documentation": {}
+    },
+    {
+        "label": "IOC_SIZESHIFT",
+        "kind": 5,
+        "importPath": "src.selkies_gstreamer.gamepad",
+        "description": "src.selkies_gstreamer.gamepad",
+        "peekOfCode": "IOC_SIZESHIFT = IOC_TYPESHIFT + IOC_TYPEBITS\nIOC_DIRSHIFT = IOC_SIZESHIFT + IOC_SIZEBITS\nIOC_WRITE = 1\ndef _IOC(dir, type, nr, size):\n    return (dir << IOC_DIRSHIFT) | (type << IOC_TYPESHIFT) | (nr << IOC_NRSHIFT) | (size << IOC_SIZESHIFT)\ndef _IO(type, nr):\n    return _IOC(0, type, nr, 0)\ndef _IOW(type, nr, size):\n    return _IOC(IOC_WRITE, type, nr, size)\nUI_SET_EVBIT = _IOW(UINPUT_IOCTL_BASE, 100, 4)",
+        "detail": "src.selkies_gstreamer.gamepad",
+        "documentation": {}
+    },
+    {
+        "label": "IOC_DIRSHIFT",
+        "kind": 5,
+        "importPath": "src.selkies_gstreamer.gamepad",
+        "description": "src.selkies_gstreamer.gamepad",
+        "peekOfCode": "IOC_DIRSHIFT = IOC_SIZESHIFT + IOC_SIZEBITS\nIOC_WRITE = 1\ndef _IOC(dir, type, nr, size):\n    return (dir << IOC_DIRSHIFT) | (type << IOC_TYPESHIFT) | (nr << IOC_NRSHIFT) | (size << IOC_SIZESHIFT)\ndef _IO(type, nr):\n    return _IOC(0, type, nr, 0)\ndef _IOW(type, nr, size):\n    return _IOC(IOC_WRITE, type, nr, size)\nUI_SET_EVBIT = _IOW(UINPUT_IOCTL_BASE, 100, 4)\nUI_SET_KEYBIT = _IOW(UINPUT_IOCTL_BASE, 101, 4)",
+        "detail": "src.selkies_gstreamer.gamepad",
+        "documentation": {}
+    },
+    {
+        "label": "IOC_WRITE",
+        "kind": 5,
+        "importPath": "src.selkies_gstreamer.gamepad",
+        "description": "src.selkies_gstreamer.gamepad",
+        "peekOfCode": "IOC_WRITE = 1\ndef _IOC(dir, type, nr, size):\n    return (dir << IOC_DIRSHIFT) | (type << IOC_TYPESHIFT) | (nr << IOC_NRSHIFT) | (size << IOC_SIZESHIFT)\ndef _IO(type, nr):\n    return _IOC(0, type, nr, 0)\ndef _IOW(type, nr, size):\n    return _IOC(IOC_WRITE, type, nr, size)\nUI_SET_EVBIT = _IOW(UINPUT_IOCTL_BASE, 100, 4)\nUI_SET_KEYBIT = _IOW(UINPUT_IOCTL_BASE, 101, 4)\nUI_SET_ABSBIT = _IOW(UINPUT_IOCTL_BASE, 103, 4)",
+        "detail": "src.selkies_gstreamer.gamepad",
+        "documentation": {}
+    },
+    {
+        "label": "UI_SET_EVBIT",
+        "kind": 5,
+        "importPath": "src.selkies_gstreamer.gamepad",
+        "description": "src.selkies_gstreamer.gamepad",
+        "peekOfCode": "UI_SET_EVBIT = _IOW(UINPUT_IOCTL_BASE, 100, 4)\nUI_SET_KEYBIT = _IOW(UINPUT_IOCTL_BASE, 101, 4)\nUI_SET_ABSBIT = _IOW(UINPUT_IOCTL_BASE, 103, 4)\nUI_DEV_CREATE = _IO(UINPUT_IOCTL_BASE, 1)\nUI_DEV_DESTROY = _IO(UINPUT_IOCTL_BASE, 2)\nHAT_AXES = {\n    ABS_HAT0X, ABS_HAT0Y,\n    ABS_HAT1X, ABS_HAT1Y,\n    ABS_HAT2X, ABS_HAT2Y,\n    ABS_HAT3X, ABS_HAT3Y",
+        "detail": "src.selkies_gstreamer.gamepad",
+        "documentation": {}
+    },
+    {
+        "label": "UI_SET_KEYBIT",
+        "kind": 5,
+        "importPath": "src.selkies_gstreamer.gamepad",
+        "description": "src.selkies_gstreamer.gamepad",
+        "peekOfCode": "UI_SET_KEYBIT = _IOW(UINPUT_IOCTL_BASE, 101, 4)\nUI_SET_ABSBIT = _IOW(UINPUT_IOCTL_BASE, 103, 4)\nUI_DEV_CREATE = _IO(UINPUT_IOCTL_BASE, 1)\nUI_DEV_DESTROY = _IO(UINPUT_IOCTL_BASE, 2)\nHAT_AXES = {\n    ABS_HAT0X, ABS_HAT0Y,\n    ABS_HAT1X, ABS_HAT1Y,\n    ABS_HAT2X, ABS_HAT2Y,\n    ABS_HAT3X, ABS_HAT3Y\n}",
+        "detail": "src.selkies_gstreamer.gamepad",
+        "documentation": {}
+    },
+    {
+        "label": "UI_SET_ABSBIT",
+        "kind": 5,
+        "importPath": "src.selkies_gstreamer.gamepad",
+        "description": "src.selkies_gstreamer.gamepad",
+        "peekOfCode": "UI_SET_ABSBIT = _IOW(UINPUT_IOCTL_BASE, 103, 4)\nUI_DEV_CREATE = _IO(UINPUT_IOCTL_BASE, 1)\nUI_DEV_DESTROY = _IO(UINPUT_IOCTL_BASE, 2)\nHAT_AXES = {\n    ABS_HAT0X, ABS_HAT0Y,\n    ABS_HAT1X, ABS_HAT1Y,\n    ABS_HAT2X, ABS_HAT2Y,\n    ABS_HAT3X, ABS_HAT3Y\n}\n# Joystick event struct",
+        "detail": "src.selkies_gstreamer.gamepad",
+        "documentation": {}
+    },
+    {
+        "label": "UI_DEV_CREATE",
+        "kind": 5,
+        "importPath": "src.selkies_gstreamer.gamepad",
+        "description": "src.selkies_gstreamer.gamepad",
+        "peekOfCode": "UI_DEV_CREATE = _IO(UINPUT_IOCTL_BASE, 1)\nUI_DEV_DESTROY = _IO(UINPUT_IOCTL_BASE, 2)\nHAT_AXES = {\n    ABS_HAT0X, ABS_HAT0Y,\n    ABS_HAT1X, ABS_HAT1Y,\n    ABS_HAT2X, ABS_HAT2Y,\n    ABS_HAT3X, ABS_HAT3Y\n}\n# Joystick event struct\n# https://www.kernel.org/doc/Documentation/input/joystick-api.txt",
+        "detail": "src.selkies_gstreamer.gamepad",
+        "documentation": {}
+    },
+    {
+        "label": "UI_DEV_DESTROY",
+        "kind": 5,
+        "importPath": "src.selkies_gstreamer.gamepad",
+        "description": "src.selkies_gstreamer.gamepad",
+        "peekOfCode": "UI_DEV_DESTROY = _IO(UINPUT_IOCTL_BASE, 2)\nHAT_AXES = {\n    ABS_HAT0X, ABS_HAT0Y,\n    ABS_HAT1X, ABS_HAT1Y,\n    ABS_HAT2X, ABS_HAT2Y,\n    ABS_HAT3X, ABS_HAT3Y\n}\n# Joystick event struct\n# https://www.kernel.org/doc/Documentation/input/joystick-api.txt\n# struct js_event {",
+        "detail": "src.selkies_gstreamer.gamepad",
+        "documentation": {}
+    },
+    {
+        "label": "HAT_AXES",
+        "kind": 5,
+        "importPath": "src.selkies_gstreamer.gamepad",
+        "description": "src.selkies_gstreamer.gamepad",
+        "peekOfCode": "HAT_AXES = {\n    ABS_HAT0X, ABS_HAT0Y,\n    ABS_HAT1X, ABS_HAT1Y,\n    ABS_HAT2X, ABS_HAT2Y,\n    ABS_HAT3X, ABS_HAT3Y\n}\n# Joystick event struct\n# https://www.kernel.org/doc/Documentation/input/joystick-api.txt\n# struct js_event {\n#    __u32 time;     /* event timestamp in milliseconds */",
         "detail": "src.selkies_gstreamer.gamepad",
         "documentation": {}
     },
@@ -2701,7 +2881,7 @@
         "kind": 6,
         "importPath": "src.selkies_gstreamer.webrtc_input",
         "description": "src.selkies_gstreamer.webrtc_input",
-        "peekOfCode": "class WebRTCInputError(Exception):\n    pass\nclass WebRTCInput:\n    def __init__(self, uinput_mouse_socket_path=\"\", js_socket_path=\"\", enable_clipboard=\"\", enable_cursors=True, cursor_size=16, cursor_scale=1.0, cursor_debug=False):\n        \"\"\"Initializes WebRTC input instance\n        \"\"\"\n        self.clipboard_running = False\n        self.uinput_mouse_socket_path = uinput_mouse_socket_path\n        self.uinput_mouse_socket = None\n        # Map of gamepad numbers to socket paths",
+        "peekOfCode": "class WebRTCInputError(Exception):\n    pass\nclass WebRTCInput:\n    def __init__(self, uinput_mouse_socket_path=\"\", js_socket_path=\"\", enable_clipboard=\"\", enable_cursors=True, cursor_size=16, cursor_scale=1.0, cursor_debug=False, enable_uinput_gamepad=False, uinput_device=\"/dev/uinput\"):\n        \"\"\"Initializes WebRTC input instance\n        \"\"\"\n        self.clipboard_running = False\n        self.uinput_mouse_socket_path = uinput_mouse_socket_path\n        self.uinput_mouse_socket = None\n        self.enable_uinput_gamepad = enable_uinput_gamepad",
         "detail": "src.selkies_gstreamer.webrtc_input",
         "documentation": {}
     },
@@ -2710,7 +2890,7 @@
         "kind": 6,
         "importPath": "src.selkies_gstreamer.webrtc_input",
         "description": "src.selkies_gstreamer.webrtc_input",
-        "peekOfCode": "class WebRTCInput:\n    def __init__(self, uinput_mouse_socket_path=\"\", js_socket_path=\"\", enable_clipboard=\"\", enable_cursors=True, cursor_size=16, cursor_scale=1.0, cursor_debug=False):\n        \"\"\"Initializes WebRTC input instance\n        \"\"\"\n        self.clipboard_running = False\n        self.uinput_mouse_socket_path = uinput_mouse_socket_path\n        self.uinput_mouse_socket = None\n        # Map of gamepad numbers to socket paths\n        self.js_socket_path_map = {i: os.path.join(js_socket_path, \"selkies_js%d.sock\" % i) for i in range(4)}\n        # Map of gamepad number to SelkiesGamepad objects",
+        "peekOfCode": "class WebRTCInput:\n    def __init__(self, uinput_mouse_socket_path=\"\", js_socket_path=\"\", enable_clipboard=\"\", enable_cursors=True, cursor_size=16, cursor_scale=1.0, cursor_debug=False, enable_uinput_gamepad=False, uinput_device=\"/dev/uinput\"):\n        \"\"\"Initializes WebRTC input instance\n        \"\"\"\n        self.clipboard_running = False\n        self.uinput_mouse_socket_path = uinput_mouse_socket_path\n        self.uinput_mouse_socket = None\n        self.enable_uinput_gamepad = enable_uinput_gamepad\n        self.uinput_device = uinput_device\n        # Map of gamepad numbers to socket paths",
         "detail": "src.selkies_gstreamer.webrtc_input",
         "documentation": {}
     },
