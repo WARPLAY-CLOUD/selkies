@@ -83,6 +83,7 @@ typedef struct
 {
     char open_dev_name[255];
     char socket_path[255];
+    int js_num;
     int sockfd;
     js_corr_t corr;
     js_config_t js_config;
@@ -92,6 +93,7 @@ static js_interposer_t interposers[NUM_JS_INTERPOSERS] = {
     {
         open_dev_name : JS0_DEVICE_PATH,
         socket_path : JS0_SOCKET_PATH,
+        js_num : 0,
         sockfd : -1,
         corr : {},
         js_config : {},
@@ -99,6 +101,7 @@ static js_interposer_t interposers[NUM_JS_INTERPOSERS] = {
     {
         open_dev_name : JS1_DEVICE_PATH,
         socket_path : JS1_SOCKET_PATH,
+        js_num : 1,
         sockfd : -1,
         corr : {},
         js_config : {},
@@ -106,6 +109,7 @@ static js_interposer_t interposers[NUM_JS_INTERPOSERS] = {
     {
         open_dev_name : JS2_DEVICE_PATH,
         socket_path : JS2_SOCKET_PATH,
+        js_num : 2,
         sockfd : -1,
         corr : {},
         js_config : {},
@@ -113,6 +117,7 @@ static js_interposer_t interposers[NUM_JS_INTERPOSERS] = {
     {
         open_dev_name : JS3_DEVICE_PATH,
         socket_path : JS3_SOCKET_PATH,
+        js_num : 3,
         sockfd : -1,
         corr : {},
         js_config : {},
@@ -143,6 +148,20 @@ static void interposer_log(const char *level, const char *msg, ...)
     va_end(argp);
 }
 
+static void maybe_override_socket_path(js_interposer_t *interposer)
+{
+    const char *base = getenv("SELKIES_JS_SOCKET_PATH");
+    if (base == NULL || base[0] == '\0')
+        return;
+
+    int n = snprintf(interposer->socket_path, sizeof(interposer->socket_path),
+                     "%s/selkies_js%d.sock", base, interposer->js_num);
+    if (n < 0 || (size_t)n >= sizeof(interposer->socket_path))
+    {
+        interposer_log(LOG_WARN, "SELKIES_JS_SOCKET_PATH too long, using default socket path: %s", interposer->socket_path);
+    }
+}
+
 void init_real_ioctl()
 {
     if (real_ioctl != NULL)
@@ -166,20 +185,34 @@ void init_real_read()
 
 int read_config(int fd, js_config_t *js_config)
 {
-    ssize_t bytesRead;
-
-    // Read config from the file descriptor
-    bytesRead = read(fd, js_config, sizeof(js_config_t));
-
-    if (bytesRead == -1)
+    // Ensure the entire config struct is read (read() may return partial)
+    init_real_read();
+    if (real_read == NULL)
     {
-        interposer_log(LOG_ERROR, "Failed to read config");
+        interposer_log(LOG_ERROR, "Failed to get real_read when reading config: %s", dlerror());
         return -1;
     }
-    else if (bytesRead == 0)
+
+    size_t total = 0;
+    uint8_t *ptr = (uint8_t *)js_config;
+    while (total < sizeof(js_config_t))
     {
-        interposer_log(LOG_ERROR, "Failed to read config, reached socket EOF and 0 bytes read");
-        // End of file reached
+        ssize_t r = real_read(fd, ptr + total, sizeof(js_config_t) - total);
+        if (r > 0)
+        {
+            total += (size_t)r;
+            continue;
+        }
+        if (r == 0)
+        {
+            interposer_log(LOG_ERROR, "Failed to read config, EOF after %zu/%zu bytes", total, sizeof(js_config_t));
+            return -1;
+        }
+        if (errno == EINTR)
+        {
+            continue;
+        }
+        interposer_log(LOG_ERROR, "Failed to read config after %zu/%zu bytes: %s", total, sizeof(js_config_t), strerror(errno));
         return -1;
     }
 
@@ -223,6 +256,10 @@ int open(const char *pathname, int flags, ...)
     }
 
     interposer_log(LOG_INFO, "Intercepted open call for %s", interposer->open_dev_name);
+
+    // Allow overriding the directory where Selkies writes selkies_js{0-3}.sock
+    // (Python side: --js_socket_path / SELKIES_JS_SOCKET_PATH).
+    maybe_override_socket_path(interposer);
 
     // Open the existing Unix socket
     interposer->sockfd = socket(AF_UNIX, SOCK_STREAM, 0);

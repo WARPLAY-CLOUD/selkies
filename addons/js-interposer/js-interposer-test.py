@@ -212,7 +212,7 @@ async def send_events():
                 client = clients[fd]
                 print("Sending event to client: %d" % fd)
                 button_event = await asyncio.to_thread(get_btn_event, btn_num, btn_val)
-                await asyncio.to_thread(socket.sendall, client, button_event)
+                await asyncio.to_thread(client.sendall, button_event)
             except BrokenPipeError:
                 print("Client %d disconnected" % fd)
                 await asyncio.to_thread(closed_clients.append, fd)
@@ -238,7 +238,7 @@ async def run_server():
 
     server = await asyncio.to_thread(socket.socket, socket.AF_UNIX, socket.SOCK_STREAM)
     await asyncio.to_thread(server.bind, SOCKET_PATH)
-    await asyncio.to_thread(server.listen, 1)
+    await asyncio.to_thread(server.listen, 16)
     await asyncio.to_thread(server.setblocking, False)
 
     print('Listening for connections on %s' % SOCKET_PATH)
@@ -248,13 +248,13 @@ async def run_server():
 
     try:
         while True:
-            client, _ = await asyncio.to_thread(socket.sendall, server)
+            client, _ = await asyncio.to_thread(server.accept)
             fd = client.fileno()
             print("Client connected with fd: %d" % fd)
 
             # Send client the joystick configuration
             joystick_config = await asyncio.to_thread(make_config)
-            await asyncio.to_thread(socket.sendall, client, joystick_config)
+            await asyncio.to_thread(client.sendall, joystick_config)
 
             # Add client to dictionary to receive events.
             clients[fd] = client
