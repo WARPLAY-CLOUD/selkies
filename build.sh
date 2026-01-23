@@ -48,6 +48,19 @@ WEB_VARIANT=${WEB_VARIANT:-gst-web-react}  # gst-web-react (по умолчан�
 # - build: build locally (slow)
 GSTREAMER_BUNDLE_SOURCE=${GSTREAMER_BUNDLE_SOURCE:-auto}
 
+# Ubuntu version fallback (prefer exact, otherwise fall back down).
+release_fallbacks() {
+    case "${DISTRIB_RELEASE}" in
+        "24.04") echo "24.04 22.04 20.04" ;;
+        "22.04") echo "22.04 20.04" ;;
+        "20.04") echo "20.04" ;;
+        *)
+            # Keep user-provided value first, then common supported baselines.
+            echo "${DISTRIB_RELEASE} 24.04 22.04 20.04" | awk '{for(i=1;i<=NF;i++) if(!seen[$i]++){printf "%s%s",$i,(i==NF?RS:OFS)}}'
+            ;;
+    esac
+}
+
 # Проверка варианта web интерфейса
 if [ "$WEB_VARIANT" != "gst-web" ] && [ "$WEB_VARIANT" != "gst-web-react" ]; then
     echo -e "${RED}✗ Неверный WEB_VARIANT: ${WEB_VARIANT}${NC}"
@@ -79,6 +92,7 @@ echo "  Дистрибутив: ${DISTRIB_IMAGE} ${DISTRIB_RELEASE}"
 echo "  Архитектура: ${ARCH}"
 echo "  Web вариант: ${WEB_VARIANT} $([ "$WEB_VARIANT" = "gst-web-react" ] && echo "(React+TypeScript)" || echo "(Vue.js)")"
 echo "  GStreamer bundle source: ${GSTREAMER_BUNDLE_SOURCE}"
+echo "  Ubuntu fallback order: $(release_fallbacks)"
 echo ""
 echo -e "${BLUE}Что будет собрано:${NC}"
 echo "  [$([ "$BUILD_PYTHON" = "true" ] && echo "x" || echo " ")] Python wheel (обязательный)"
@@ -233,31 +247,46 @@ fi
 if [ "$BUILD_JS_INTERPOSER" = "true" ]; then
     echo -e "${GREEN}[3/4] Сборка JS Interposer...${NC}"
     
-    # Собрать Docker образ с JS Interposer
-    docker build \
-        --build-arg DISTRIB_IMAGE="${DISTRIB_IMAGE}" \
-        --build-arg DISTRIB_RELEASE="${DISTRIB_RELEASE}" \
-        --build-arg PKG_NAME="${PKG_NAME}" \
-        --build-arg PKG_VERSION="${VERSION}" \
-        --build-arg DEBFULLNAME="Build User" \
-        --build-arg DEBEMAIL="build@localhost" \
-        -t selkies-js-interposer-builder:latest \
-        -f "${REPO_ROOT}/addons/js-interposer/Dockerfile.debpkg" \
-        "${REPO_ROOT}/addons/js-interposer" 2>&1 | grep -E "(Step|Successfully)" || true
-    
-    # Извлечь .deb из образа
-    echo -e "${CYAN}  → Извлечение .deb пакета...${NC}"
-    CONTAINER_ID=$(docker create selkies-js-interposer-builder:latest)
-    docker cp "${CONTAINER_ID}:/opt/${PKG_NAME}_${VERSION}.deb" \
-        "${REPO_ROOT}/dist/selkies-js-interposer_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.deb" 2>/dev/null || {
-        echo -e "${YELLOW}  ⚠ Не удалось извлечь .deb (опциональный компонент)${NC}"
-        docker rm "${CONTAINER_ID}" >/dev/null 2>&1
-    }
-    docker rm "${CONTAINER_ID}" >/dev/null 2>&1
-    
-    if [ -f "${REPO_ROOT}/dist/selkies-js-interposer_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.deb" ]; then
-        echo -e "${GREEN}  ✓ JS Interposer: selkies-js-interposer_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.deb${NC}"
-    else
+    JS_BUILT=false
+    JS_EFFECTIVE_RELEASE=""
+    for REL in $(release_fallbacks); do
+        echo -e "${CYAN}  → Попытка сборки JS Interposer для Ubuntu ${REL}...${NC}"
+        if docker build \
+            --build-arg DISTRIB_IMAGE="${DISTRIB_IMAGE}" \
+            --build-arg DISTRIB_RELEASE="${REL}" \
+            --build-arg PKG_NAME="${PKG_NAME}" \
+            --build-arg PKG_VERSION="${VERSION}" \
+            --build-arg DEBFULLNAME="Build User" \
+            --build-arg DEBEMAIL="build@localhost" \
+            -t selkies-js-interposer-builder:latest \
+            -f "${REPO_ROOT}/addons/js-interposer/Dockerfile.debpkg" \
+            "${REPO_ROOT}/addons/js-interposer" 2>&1 | grep -E "(Step|Successfully|ERROR)" || true; then
+            :
+        fi
+
+        # Извлечь .deb из образа
+        echo -e "${CYAN}    → Извлечение .deb пакета...${NC}"
+        OUT_DEB="${REPO_ROOT}/dist/selkies-js-interposer_v${VERSION}_${DISTRIB_IMAGE}${REL}_${ARCH}.deb"
+        CONTAINER_ID=$(docker create selkies-js-interposer-builder:latest 2>/dev/null || true)
+        if [ -n "${CONTAINER_ID}" ]; then
+            docker cp "${CONTAINER_ID}:/opt/${PKG_NAME}_${VERSION}.deb" "${OUT_DEB}" 2>/dev/null || true
+            docker rm "${CONTAINER_ID}" >/dev/null 2>&1 || true
+        fi
+
+        if [ -f "${OUT_DEB}" ]; then
+            DEB_SIZE=$(stat -c%s "${OUT_DEB}" 2>/dev/null || stat -f%z "${OUT_DEB}" 2>/dev/null || echo 0)
+            if [ "${DEB_SIZE}" -ge 1000 ]; then
+                echo -e "${GREEN}  ✓ JS Interposer: $(basename "${OUT_DEB}")${NC}"
+                JS_BUILT=true
+                JS_EFFECTIVE_RELEASE="${REL}"
+                break
+            else
+                rm -f "${OUT_DEB}" || true
+            fi
+        fi
+    done
+
+    if [ "${JS_BUILT}" != "true" ]; then
         echo -e "${YELLOW}  ⚠ JS Interposer не собран (опциональный компонент)${NC}"
     fi
     echo ""
@@ -269,10 +298,7 @@ fi
 # ========================================
 # 4. GStreamer bundle (долгая сборка!)
 # ========================================
-GSTREAMER_TARBALL_NAME="gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.tar.gz"
-GSTREAMER_TARBALL="${REPO_ROOT}/dist/${GSTREAMER_TARBALL_NAME}"
 SELKIES_CDN_BASE_URL=${SELKIES_CDN_BASE_URL:-"https://cdn.warplay.cloud/drivers/linux/system/selkies/releases/download/v${VERSION}"}
-GSTREAMER_CDN_URL="${SELKIES_CDN_BASE_URL}/${GSTREAMER_TARBALL_NAME}"
 
 validate_gstreamer_bundle() {
     local f="$1"
@@ -284,55 +310,95 @@ validate_gstreamer_bundle() {
     return 0
 }
 
+# Pick best available release for GStreamer bundle for current Ubuntu (prefer exact, then fall back).
+GSTREAMER_EFFECTIVE_RELEASE="${DISTRIB_RELEASE}"
+GSTREAMER_TARBALL_NAME=""
+GSTREAMER_TARBALL=""
+GSTREAMER_CDN_URL=""
+
+select_gstreamer_release() {
+    for REL in $(release_fallbacks); do
+        local name="gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${REL}_${ARCH}.tar.gz"
+        local cand="${REPO_ROOT}/dist/${name}"
+        if validate_gstreamer_bundle "${cand}"; then
+            GSTREAMER_EFFECTIVE_RELEASE="${REL}"
+            GSTREAMER_TARBALL_NAME="${name}"
+            GSTREAMER_TARBALL="${cand}"
+            GSTREAMER_CDN_URL="${SELKIES_CDN_BASE_URL}/${name}"
+            return 0
+        fi
+    done
+    # Default to first choice for download/build attempts.
+    GSTREAMER_TARBALL_NAME="gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.tar.gz"
+    GSTREAMER_TARBALL="${REPO_ROOT}/dist/${GSTREAMER_TARBALL_NAME}"
+    GSTREAMER_CDN_URL="${SELKIES_CDN_BASE_URL}/${GSTREAMER_TARBALL_NAME}"
+    return 1
+}
+
+# Initialize candidate vars (may update later after we find/download/build)
+select_gstreamer_release || true
+
 # 4a) Reuse local bundle / download from CDN (cache in dist/) before attempting a long local build.
 if [ "${GSTREAMER_BUNDLE_SOURCE}" != "build" ]; then
-    if validate_gstreamer_bundle "${GSTREAMER_TARBALL}"; then
-        echo -e "${BLUE}[4/4] GStreamer bundle уже есть в dist/, пропускаем сборку${NC}"
+    if select_gstreamer_release; then
+        echo -e "${BLUE}[4/4] GStreamer bundle уже есть в dist/ (Ubuntu ${GSTREAMER_EFFECTIVE_RELEASE}), пропускаем сборку${NC}"
         BUILD_GSTREAMER=false
     fi
 
-    if ! validate_gstreamer_bundle "${GSTREAMER_TARBALL}"; then
-        for CAND in \
-            "${REPO_ROOT}/../docker-selkies-egl-desktop/install_to_docker/${GSTREAMER_TARBALL_NAME}" \
-            "${REPO_ROOT}/../docker-selkies-egl-desktop/install_to_docker/selkies/${GSTREAMER_TARBALL_NAME}" \
-            "${REPO_ROOT}/../docker-selkies-egl-desktop/install_to_docker/gstreamer-selkies_gpl_v${VERSION}_ubuntu${DISTRIB_RELEASE}_${ARCH}.tar.gz" \
-            "${REPO_ROOT}/../docker-selkies-egl-desktop/install_to_docker/selkies/gstreamer-selkies_gpl_v${VERSION}_ubuntu${DISTRIB_RELEASE}_${ARCH}.tar.gz" \
-            ; do
-            if validate_gstreamer_bundle "${CAND}"; then
-                echo -e "${BLUE}[4/4] Найден локальный GStreamer bundle: ${CAND}${NC}"
-                mkdir -p "${REPO_ROOT}/dist"
-                cp -f "${CAND}" "${GSTREAMER_TARBALL}" || true
+	    if [ "$BUILD_GSTREAMER" = "true" ]; then
+	        # Try to find a valid local bundle in neighboring docker repo (prefer exact, then fall back)
+	        for REL in $(release_fallbacks); do
+	            for CAND in \
+	                "${REPO_ROOT}/../docker-selkies-egl-desktop/install_to_docker/gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${REL}_${ARCH}.tar.gz" \
+	                "${REPO_ROOT}/../docker-selkies-egl-desktop/install_to_docker/selkies/gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${REL}_${ARCH}.tar.gz" \
+                "${REPO_ROOT}/../docker-selkies-egl-desktop/install_to_docker/gstreamer-selkies_gpl_v${VERSION}_ubuntu${REL}_${ARCH}.tar.gz" \
+                "${REPO_ROOT}/../docker-selkies-egl-desktop/install_to_docker/selkies/gstreamer-selkies_gpl_v${VERSION}_ubuntu${REL}_${ARCH}.tar.gz" \
+                ; do
+                if validate_gstreamer_bundle "${CAND}"; then
+                    GSTREAMER_EFFECTIVE_RELEASE="${REL}"
+                    GSTREAMER_TARBALL_NAME="gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${REL}_${ARCH}.tar.gz"
+                    GSTREAMER_TARBALL="${REPO_ROOT}/dist/${GSTREAMER_TARBALL_NAME}"
+                    GSTREAMER_CDN_URL="${SELKIES_CDN_BASE_URL}/${GSTREAMER_TARBALL_NAME}"
+                    echo -e "${BLUE}[4/4] Найден локальный GStreamer bundle (Ubuntu ${REL}): ${CAND}${NC}"
+                    mkdir -p "${REPO_ROOT}/dist"
+                    cp -f "${CAND}" "${GSTREAMER_TARBALL}" || true
+                    if validate_gstreamer_bundle "${GSTREAMER_TARBALL}"; then
+                        echo -e "${GREEN}  ✓ Используем локальный bundle (кэшировано в dist/)${NC}"
+                        BUILD_GSTREAMER=false
+                        break 2
+                    else
+                        rm -f "${GSTREAMER_TARBALL}" || true
+                    fi
+                fi
+            done
+        done
+    fi
+
+    if [ "$BUILD_GSTREAMER" = "true" ]; then
+        echo -e "${CYAN}[4/4] GStreamer bundle не найден, пробуем скачать с CDN...${NC}"
+        for REL in $(release_fallbacks); do
+            GSTREAMER_EFFECTIVE_RELEASE="${REL}"
+            GSTREAMER_TARBALL_NAME="gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${REL}_${ARCH}.tar.gz"
+            GSTREAMER_TARBALL="${REPO_ROOT}/dist/${GSTREAMER_TARBALL_NAME}"
+            GSTREAMER_CDN_URL="${SELKIES_CDN_BASE_URL}/${GSTREAMER_TARBALL_NAME}"
+            echo -e "${CYAN}  → ${GSTREAMER_CDN_URL}${NC}"
+            mkdir -p "${REPO_ROOT}/dist"
+            if curl -fSL --retry 5 --retry-delay 3 --retry-connrefused -o "${GSTREAMER_TARBALL}" "${GSTREAMER_CDN_URL}"; then
                 if validate_gstreamer_bundle "${GSTREAMER_TARBALL}"; then
-                    echo -e "${GREEN}  ✓ Используем локальный bundle (кэшировано в dist/)${NC}"
+                    SIZE_H=$(du -h "${GSTREAMER_TARBALL}" | cut -f1)
+                    echo -e "${GREEN}  ✓ GStreamer bundle скачан и закэширован (Ubuntu ${REL}): ${GSTREAMER_TARBALL_NAME} (${SIZE_H})${NC}"
                     BUILD_GSTREAMER=false
                     break
                 else
+                    echo -e "${YELLOW}  ⚠ Скачанный bundle поврежден/маленький, удаляем${NC}"
                     rm -f "${GSTREAMER_TARBALL}" || true
                 fi
             fi
         done
-    fi
 
-    if ! validate_gstreamer_bundle "${GSTREAMER_TARBALL}"; then
-        echo -e "${CYAN}[4/4] GStreamer bundle не найден, пробуем скачать с CDN...${NC}"
-        echo -e "${CYAN}  → ${GSTREAMER_CDN_URL}${NC}"
-        mkdir -p "${REPO_ROOT}/dist"
-        if curl -fSL --retry 5 --retry-delay 3 --retry-connrefused -o "${GSTREAMER_TARBALL}" "${GSTREAMER_CDN_URL}"; then
-            if validate_gstreamer_bundle "${GSTREAMER_TARBALL}"; then
-                SIZE_H=$(du -h "${GSTREAMER_TARBALL}" | cut -f1)
-                echo -e "${GREEN}  ✓ GStreamer bundle скачан и закэширован: ${GSTREAMER_TARBALL_NAME} (${SIZE_H})${NC}"
-                BUILD_GSTREAMER=false
-            else
-                echo -e "${YELLOW}  ⚠ Скачанный bundle поврежден/маленький, удаляем${NC}"
-                rm -f "${GSTREAMER_TARBALL}" || true
-            fi
-        else
-            echo -e "${YELLOW}  ⚠ Не удалось скачать bundle с CDN${NC}"
-            rm -f "${GSTREAMER_TARBALL}" || true
-            if [ "${GSTREAMER_BUNDLE_SOURCE}" = "cdn" ]; then
-                echo -e "${RED}  ✗ GSTREAMER_BUNDLE_SOURCE=cdn: CDN download failed${NC}"
-                exit 1
-            fi
+        if [ "$BUILD_GSTREAMER" = "true" ] && [ "${GSTREAMER_BUNDLE_SOURCE}" = "cdn" ]; then
+            echo -e "${RED}  ✗ GSTREAMER_BUNDLE_SOURCE=cdn: CDN download failed for all fallback releases${NC}"
+            exit 1
         fi
     fi
 fi
@@ -362,65 +428,68 @@ if [ "$BUILD_GSTREAMER" = "true" ] && [ "${GSTREAMER_BUNDLE_SOURCE}" != "cdn" ];
         echo ""
         BUILD_GSTREAMER=false
     else
-        echo -e "  ${GREEN}Запускаем сборку GStreamer...${NC}                    "
-    fi
+	    echo -e "  ${GREEN}Запускаем сборку GStreamer...${NC}                    "
+	fi
 fi
 
 # If we skipped the local build, try downloading from CDN (auto) so downstream steps can still use the tarball.
 if [ "$BUILD_GSTREAMER" = "false" ] && [ "${GSTREAMER_BUNDLE_SOURCE}" = "auto" ]; then
-    if ! validate_gstreamer_bundle "${GSTREAMER_TARBALL}"; then
-        echo -e "${CYAN}[4/4] GStreamer не собран, пробуем скачать bundle с CDN для кэша...${NC}"
-        mkdir -p "${REPO_ROOT}/dist"
-        if curl -fSL --retry 5 --retry-delay 3 --retry-connrefused -o "${GSTREAMER_TARBALL}" "${GSTREAMER_CDN_URL}"; then
-            if validate_gstreamer_bundle "${GSTREAMER_TARBALL}"; then
-                SIZE_H=$(du -h "${GSTREAMER_TARBALL}" | cut -f1)
-                echo -e "${GREEN}  ✓ Bundle скачан: ${GSTREAMER_TARBALL_NAME} (${SIZE_H})${NC}"
-            else
-                rm -f "${GSTREAMER_TARBALL}" || true
-            fi
-        fi
-    fi
+    # No-op if we already have a valid tarball (from dist/neighbor/CDN/build).
+    :
 fi
 
 if [ "$BUILD_GSTREAMER" = "true" ] && [ "${GSTREAMER_BUNDLE_SOURCE}" != "cdn" ]; then
-    echo -e "${CYAN}  → Сборка для ${DISTRIB_IMAGE}:${DISTRIB_RELEASE}${NC}"
-    
-    # Собрать Docker образ с GStreamer
-    docker build \
-        --build-arg DISTRIB_IMAGE="${DISTRIB_IMAGE}" \
-        --build-arg DISTRIB_RELEASE="${DISTRIB_RELEASE}" \
-        -t selkies-gstreamer-builder:latest \
-        -f "${REPO_ROOT}/addons/gstreamer/Dockerfile" \
-        "${REPO_ROOT}/addons/gstreamer" 2>&1 | \
-        tee /tmp/gstreamer-build.log | \
-        grep -E "(Step|Successfully|ERROR|ninja)" || true
-    
-    # Проверить успешность сборки
-    if ! docker images | grep -q "selkies-gstreamer-builder"; then
-        echo -e "${RED}  ✗ Сборка GStreamer не удалась${NC}"
+    GS_BUILT=false
+    for REL in $(release_fallbacks); do
+        echo -e "${CYAN}  → Сборка для ${DISTRIB_IMAGE}:${REL}${NC}"
+
+        docker build \
+            --build-arg DISTRIB_IMAGE="${DISTRIB_IMAGE}" \
+            --build-arg DISTRIB_RELEASE="${REL}" \
+            -t selkies-gstreamer-builder:latest \
+            -f "${REPO_ROOT}/addons/gstreamer/Dockerfile" \
+            "${REPO_ROOT}/addons/gstreamer" 2>&1 | \
+            tee /tmp/gstreamer-build.log | \
+            grep -E "(Step|Successfully|ERROR|ninja)" || true
+
+        if ! docker images | grep -q "selkies-gstreamer-builder"; then
+            echo -e "${YELLOW}  ⚠ Сборка GStreamer для ${REL} не удалась, пробуем следующий release${NC}"
+            continue
+        fi
+
+        echo -e "${CYAN}  → Извлечение tarball из образа...${NC}"
+        GSTREAMER_EFFECTIVE_RELEASE="${REL}"
+        GSTREAMER_TARBALL_NAME="gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${REL}_${ARCH}.tar.gz"
+        GSTREAMER_TARBALL="${REPO_ROOT}/dist/${GSTREAMER_TARBALL_NAME}"
+        GSTREAMER_CDN_URL="${SELKIES_CDN_BASE_URL}/${GSTREAMER_TARBALL_NAME}"
+
+        CONTAINER_ID=$(docker create selkies-gstreamer-builder:latest)
+        docker cp "${CONTAINER_ID}:/opt/selkies-gstreamer-latest.tar.gz" "${GSTREAMER_TARBALL}" || {
+            echo -e "${YELLOW}  ⚠ Не удалось извлечь tarball для ${REL}, пробуем следующий release${NC}"
+            docker rm "${CONTAINER_ID}" >/dev/null 2>&1 || true
+            rm -f "${GSTREAMER_TARBALL}" || true
+            continue
+        }
+        docker rm "${CONTAINER_ID}" >/dev/null 2>&1 || true
+
+        if validate_gstreamer_bundle "${GSTREAMER_TARBALL}"; then
+            echo -e "${GREEN}  ✓ GStreamer bundle: ${GSTREAMER_TARBALL_NAME}${NC}"
+            SIZE=$(du -h "${GSTREAMER_TARBALL}" | cut -f1)
+            echo -e "${GREEN}    Размер: ${SIZE}${NC}"
+            GS_BUILT=true
+            break
+        else
+            echo -e "${YELLOW}  ⚠ Полученный tarball поврежден/маленький, пробуем следующий release${NC}"
+            rm -f "${GSTREAMER_TARBALL}" || true
+        fi
+    done
+
+    if [ "${GS_BUILT}" != "true" ]; then
+        echo -e "${RED}  ✗ Сборка GStreamer не удалась ни для одного fallback-release${NC}"
         echo "  Смотрите /tmp/gstreamer-build.log"
         exit 1
     fi
-    
-    # Извлечь tarball из образа
-    echo -e "${CYAN}  → Извлечение tarball из образа...${NC}"
-    CONTAINER_ID=$(docker create selkies-gstreamer-builder:latest)
-    docker cp "${CONTAINER_ID}:/opt/selkies-gstreamer-latest.tar.gz" \
-        "${REPO_ROOT}/dist/gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.tar.gz" || {
-        echo -e "${RED}  ✗ Не удалось извлечь GStreamer tarball${NC}"
-        docker rm "${CONTAINER_ID}" >/dev/null
-        exit 1
-    }
-    docker rm "${CONTAINER_ID}" >/dev/null
-    
-    if [ -f "${REPO_ROOT}/dist/gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.tar.gz" ]; then
-        echo -e "${GREEN}  ✓ GStreamer bundle: gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.tar.gz${NC}"
-        SIZE=$(du -h "${REPO_ROOT}/dist/gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.tar.gz" | cut -f1)
-        echo -e "${GREEN}    Размер: ${SIZE}${NC}"
-    else
-        echo -e "${RED}  ✗ Не удалось создать GStreamer tarball${NC}"
-        exit 1
-    fi
+
     echo ""
 fi
 
