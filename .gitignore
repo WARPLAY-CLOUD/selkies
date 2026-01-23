@@ -7,3 +7,4 @@ NOTES.md
 **/__pycache__/
 docker-selkies-egl-desktop/
 /addons/gst-web-react/node_modules
+warplay-srs-server

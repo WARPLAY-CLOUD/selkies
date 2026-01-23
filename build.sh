@@ -10,6 +10,9 @@
 #   WEB_VARIANT=gst-web ./build.sh                # Собрать с оригинальным gst-web (Vue.js)
 #   WEB_VARIANT=gst-web-react ./build.sh          # Собрать с gst-web-react (React+TS, по умолчанию)
 #   BUILD_GSTREAMER=false ./build.sh              # Пропустить GStreamer полностью
+#   GSTREAMER_BUNDLE_SOURCE=cdn ./build.sh        # Скачать GStreamer bundle с CDN (кэш в dist/)
+#   GSTREAMER_BUNDLE_SOURCE=build ./build.sh      # Всегда собирать GStreamer локально (медленно)
+#   GSTREAMER_BUNDLE_SOURCE=auto ./build.sh       # (по умолчанию) взять локальный bundle -> CDN -> build
 #   BUILD_JS_INTERPOSER=false ./build.sh          # Пропустить JS Interposer
 #   SELKIES_VERSION=1.7.0 ./build.sh              # Задать свою версию
 #   DISTRIB_RELEASE=22.04 ./build.sh              # Для Ubuntu 22.04
@@ -39,6 +42,11 @@ BUILD_WEB=${BUILD_WEB:-true}
 BUILD_JS_INTERPOSER=${BUILD_JS_INTERPOSER:-true}
 BUILD_GSTREAMER=${BUILD_GSTREAMER:-true}
 WEB_VARIANT=${WEB_VARIANT:-gst-web-react}  # gst-web-react (по умолчанию) или gst-web
+# Где брать GStreamer bundle:
+# - auto (default): reuse local tarball if present, otherwise download from CDN, otherwise build
+# - cdn: download from CDN (cache in dist/)
+# - build: build locally (slow)
+GSTREAMER_BUNDLE_SOURCE=${GSTREAMER_BUNDLE_SOURCE:-auto}
 
 # Проверка варианта web интерфейса
 if [ "$WEB_VARIANT" != "gst-web" ] && [ "$WEB_VARIANT" != "gst-web-react" ]; then
@@ -70,6 +78,7 @@ echo "  Версия: ${VERSION}"
 echo "  Дистрибутив: ${DISTRIB_IMAGE} ${DISTRIB_RELEASE}"
 echo "  Архитектура: ${ARCH}"
 echo "  Web вариант: ${WEB_VARIANT} $([ "$WEB_VARIANT" = "gst-web-react" ] && echo "(React+TypeScript)" || echo "(Vue.js)")"
+echo "  GStreamer bundle source: ${GSTREAMER_BUNDLE_SOURCE}"
 echo ""
 echo -e "${BLUE}Что будет собрано:${NC}"
 echo "  [$([ "$BUILD_PYTHON" = "true" ] && echo "x" || echo " ")] Python wheel (обязательный)"
@@ -260,7 +269,75 @@ fi
 # ========================================
 # 4. GStreamer bundle (долгая сборка!)
 # ========================================
-if [ "$BUILD_GSTREAMER" = "true" ]; then
+GSTREAMER_TARBALL_NAME="gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.tar.gz"
+GSTREAMER_TARBALL="${REPO_ROOT}/dist/${GSTREAMER_TARBALL_NAME}"
+SELKIES_CDN_BASE_URL=${SELKIES_CDN_BASE_URL:-"https://cdn.warplay.cloud/drivers/linux/system/selkies/releases/download/v${VERSION}"}
+GSTREAMER_CDN_URL="${SELKIES_CDN_BASE_URL}/${GSTREAMER_TARBALL_NAME}"
+
+validate_gstreamer_bundle() {
+    local f="$1"
+    if [ ! -f "$f" ]; then return 1; fi
+    local sz
+    sz=$(stat -c%s "$f" 2>/dev/null || stat -f%z "$f" 2>/dev/null || echo 0)
+    [ "${sz}" -ge 10000000 ] || return 1
+    gzip -t "$f" >/dev/null 2>&1 || return 1
+    return 0
+}
+
+# 4a) Reuse local bundle / download from CDN (cache in dist/) before attempting a long local build.
+if [ "${GSTREAMER_BUNDLE_SOURCE}" != "build" ]; then
+    if validate_gstreamer_bundle "${GSTREAMER_TARBALL}"; then
+        echo -e "${BLUE}[4/4] GStreamer bundle уже есть в dist/, пропускаем сборку${NC}"
+        BUILD_GSTREAMER=false
+    fi
+
+    if ! validate_gstreamer_bundle "${GSTREAMER_TARBALL}"; then
+        for CAND in \
+            "${REPO_ROOT}/../docker-selkies-egl-desktop/install_to_docker/${GSTREAMER_TARBALL_NAME}" \
+            "${REPO_ROOT}/../docker-selkies-egl-desktop/install_to_docker/selkies/${GSTREAMER_TARBALL_NAME}" \
+            "${REPO_ROOT}/../docker-selkies-egl-desktop/install_to_docker/gstreamer-selkies_gpl_v${VERSION}_ubuntu${DISTRIB_RELEASE}_${ARCH}.tar.gz" \
+            "${REPO_ROOT}/../docker-selkies-egl-desktop/install_to_docker/selkies/gstreamer-selkies_gpl_v${VERSION}_ubuntu${DISTRIB_RELEASE}_${ARCH}.tar.gz" \
+            ; do
+            if validate_gstreamer_bundle "${CAND}"; then
+                echo -e "${BLUE}[4/4] Найден локальный GStreamer bundle: ${CAND}${NC}"
+                mkdir -p "${REPO_ROOT}/dist"
+                cp -f "${CAND}" "${GSTREAMER_TARBALL}" || true
+                if validate_gstreamer_bundle "${GSTREAMER_TARBALL}"; then
+                    echo -e "${GREEN}  ✓ Используем локальный bundle (кэшировано в dist/)${NC}"
+                    BUILD_GSTREAMER=false
+                    break
+                else
+                    rm -f "${GSTREAMER_TARBALL}" || true
+                fi
+            fi
+        done
+    fi
+
+    if ! validate_gstreamer_bundle "${GSTREAMER_TARBALL}"; then
+        echo -e "${CYAN}[4/4] GStreamer bundle не найден, пробуем скачать с CDN...${NC}"
+        echo -e "${CYAN}  → ${GSTREAMER_CDN_URL}${NC}"
+        mkdir -p "${REPO_ROOT}/dist"
+        if curl -fSL --retry 5 --retry-delay 3 --retry-connrefused -o "${GSTREAMER_TARBALL}" "${GSTREAMER_CDN_URL}"; then
+            if validate_gstreamer_bundle "${GSTREAMER_TARBALL}"; then
+                SIZE_H=$(du -h "${GSTREAMER_TARBALL}" | cut -f1)
+                echo -e "${GREEN}  ✓ GStreamer bundle скачан и закэширован: ${GSTREAMER_TARBALL_NAME} (${SIZE_H})${NC}"
+                BUILD_GSTREAMER=false
+            else
+                echo -e "${YELLOW}  ⚠ Скачанный bundle поврежден/маленький, удаляем${NC}"
+                rm -f "${GSTREAMER_TARBALL}" || true
+            fi
+        else
+            echo -e "${YELLOW}  ⚠ Не удалось скачать bundle с CDN${NC}"
+            rm -f "${GSTREAMER_TARBALL}" || true
+            if [ "${GSTREAMER_BUNDLE_SOURCE}" = "cdn" ]; then
+                echo -e "${RED}  ✗ GSTREAMER_BUNDLE_SOURCE=cdn: CDN download failed${NC}"
+                exit 1
+            fi
+        fi
+    fi
+fi
+
+if [ "$BUILD_GSTREAMER" = "true" ] && [ "${GSTREAMER_BUNDLE_SOURCE}" != "cdn" ]; then
     echo -e "${GREEN}[4/4] Сборка GStreamer bundle...${NC}"
     echo -e "${YELLOW}  ⚠ ВНИМАНИЕ: Это займет 30-60 минут!${NC}"
     echo -e "${YELLOW}  ⚠ Нажмите Ctrl+C в течение 10 секунд, чтобы пропустить...${NC}"
@@ -289,7 +366,23 @@ if [ "$BUILD_GSTREAMER" = "true" ]; then
     fi
 fi
 
-if [ "$BUILD_GSTREAMER" = "true" ]; then
+# If we skipped the local build, try downloading from CDN (auto) so downstream steps can still use the tarball.
+if [ "$BUILD_GSTREAMER" = "false" ] && [ "${GSTREAMER_BUNDLE_SOURCE}" = "auto" ]; then
+    if ! validate_gstreamer_bundle "${GSTREAMER_TARBALL}"; then
+        echo -e "${CYAN}[4/4] GStreamer не собран, пробуем скачать bundle с CDN для кэша...${NC}"
+        mkdir -p "${REPO_ROOT}/dist"
+        if curl -fSL --retry 5 --retry-delay 3 --retry-connrefused -o "${GSTREAMER_TARBALL}" "${GSTREAMER_CDN_URL}"; then
+            if validate_gstreamer_bundle "${GSTREAMER_TARBALL}"; then
+                SIZE_H=$(du -h "${GSTREAMER_TARBALL}" | cut -f1)
+                echo -e "${GREEN}  ✓ Bundle скачан: ${GSTREAMER_TARBALL_NAME} (${SIZE_H})${NC}"
+            else
+                rm -f "${GSTREAMER_TARBALL}" || true
+            fi
+        fi
+    fi
+fi
+
+if [ "$BUILD_GSTREAMER" = "true" ] && [ "${GSTREAMER_BUNDLE_SOURCE}" != "cdn" ]; then
     echo -e "${CYAN}  → Сборка для ${DISTRIB_IMAGE}:${DISTRIB_RELEASE}${NC}"
     
     # Собрать Docker образ с GStreamer
