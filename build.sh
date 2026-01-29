@@ -317,13 +317,15 @@ if [ "$BUILD_CONTROL" = "true" ]; then
     fi
 
     echo -e "${CYAN}  → Сборка Docker образа control server...${NC}"
+    CONTROL_LOG="${REPO_ROOT}/dist/warplay-control-docker-build.log"
     docker build \
         -t "${CONTROL_IMAGE}" \
         -f "${CONTROL_DOCKERFILE}" \
-        "${CONTROL_CONTEXT}" 2>&1 | grep -E "(Step|Successfully|Downloading|Compiling)" || true
+        "${CONTROL_CONTEXT}" 2>&1 | tee "${CONTROL_LOG}"
     BUILD_STATUS="${PIPESTATUS[0]}"
     if [ "${BUILD_STATUS}" -ne 0 ]; then
         echo -e "${RED}  ✗ Docker build control server failed${NC}"
+        echo -e "${RED}    Лог: ${CONTROL_LOG}${NC}"
         exit 1
     fi
 
