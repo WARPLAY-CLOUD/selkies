@@ -518,6 +518,18 @@ if [ -f "${REPO_ROOT}/dist/selkies-gstreamer-web_v${VERSION}.tar.gz" ]; then
     REQUIRED_COUNT=$((REQUIRED_COUNT + 1))
 fi
 
+# Warplay control server (обязательный)
+if [ -f "${REPO_ROOT}/dist/warplay-linux-control" ]; then
+    SIZE=$(du -h "${REPO_ROOT}/dist/warplay-linux-control" | cut -f1)
+    echo -e "  ${GREEN}✓${NC} warplay-linux-control (${SIZE})"
+    ARTIFACT_COUNT=$((ARTIFACT_COUNT + 1))
+fi
+if [ -f "${REPO_ROOT}/dist/warplay-linux-control_v${VERSION}_${ARCH}.tar.gz" ]; then
+    SIZE=$(du -h "${REPO_ROOT}/dist/warplay-linux-control_v${VERSION}_${ARCH}.tar.gz" | cut -f1)
+    echo -e "  ${GREEN}✓${NC} warplay-linux-control_v${VERSION}_${ARCH}.tar.gz (${SIZE})"
+    ARTIFACT_COUNT=$((ARTIFACT_COUNT + 1))
+fi
+
 # GStreamer
 if [ -f "${REPO_ROOT}/dist/gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.tar.gz" ]; then
     SIZE=$(du -h "${REPO_ROOT}/dist/gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.tar.gz" | cut -f1)
@@ -531,7 +543,7 @@ echo ""
 
 # Проверка минимальных требований
 if [ ${REQUIRED_COUNT} -eq 2 ]; then
-    echo -e "${GREEN}✓ Минимально необходимые артефакты готовы!${NC}"
+    echo -e "${GREEN}✓ Минимально необходимые артефакты готовы (wheel + web)!${NC}"
     echo ""
     echo -e "${BLUE}Следующие шаги:${NC}"
     echo "  1. Установить Python wheel:"

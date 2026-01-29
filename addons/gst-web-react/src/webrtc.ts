@@ -86,12 +86,7 @@ export class WebRTCDemo {
     this.element = element;
     this.peer_id = peer_id;
 
-    this.input = new Input(element as HTMLVideoElement, (data: string) => {
-      if (this._connected && this._send_channel !== null && this._send_channel.readyState === 'open') {
-        this.setDebug("data channel: " + data);
-        this._send_channel.send(data);
-      }
-    });
+    this.input = new Input(element as HTMLVideoElement);
 
     // Привязываем callbacks signalling сервера
     this.signalling.setCallbacks({
@@ -602,5 +597,4 @@ export class WebRTCDemo {
     }
   }
 }
-
 

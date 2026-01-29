@@ -11,30 +11,15 @@ export interface InputCallbacks {
   onresizeend?: () => void;
 }
 
-interface WindowMath {
-  mouseMultiX: number;
-  mouseMultiY: number;
-  mouseOffsetX: number;
-  mouseOffsetY: number;
-  centerOffsetX: number;
-  centerOffsetY: number;
-  scrollX: number;
-  scrollY: number;
-  frameW: number;
-  frameH: number;
-}
-
 type Listener = [EventTarget, string, EventListener];
 
 
 export class Input {
   public element: HTMLVideoElement;
-  private send: (data: string) => void;
   private control: WarplayControl | null = null;
   public mouseRelative: boolean = false;
-  public m: WindowMath | null = null;
   private buttonMask: number = 0;
-  private keyboard: Guacamole.Keyboard | null = null;
+  private pressedKeys: Set<number> = new Set();
   public x: number = 0;
   public y: number = 0;
   public cursorScaleFactor: number | null = null;
@@ -56,9 +41,8 @@ export class Input {
   private _wheelThreshold: number = 100;
   private _scrollMagnitude: number = 10;
 
-  constructor(element: HTMLVideoElement, send: (data: string) => void) {
+  constructor(element: HTMLVideoElement) {
     this.element = element;
-    this.send = send;
   }
 
   setControl(control: WarplayControl | null): void {
@@ -79,22 +63,53 @@ export class Input {
     const containerH = rect.height;
     if (!containerW || !containerH) return null;
 
-    const ratio = Math.min(containerW / videoW, containerH / videoH);
+    const fit = getComputedStyle(this.element).objectFit || 'fill';
+
+    const toAbs = (absX: number, absY: number): { x16: number; y16: number } => {
+      const clampedX = Math.max(0, Math.min(videoW, Math.round(absX)));
+      const clampedY = Math.max(0, Math.min(videoH, Math.round(absY)));
+      const x16 = Math.round((clampedX / videoW) * 65535);
+      const y16 = Math.round((clampedY / videoH) * 65535);
+      return { x16, y16 };
+    };
+
+    const localX0 = clientX - rect.left;
+    const localY0 = clientY - rect.top;
+
+    // If the element stretches the video (default object-fit: fill), map directly to the element box.
+    if (fit === 'fill') {
+      const absX = localX0 * (videoW / containerW);
+      const absY = localY0 * (videoH / containerH);
+      return toAbs(absX, absY);
+    }
+
+    // Otherwise, approximate based on the selected fit mode.
+    let ratio: number;
+    if (fit === 'cover') {
+      ratio = Math.max(containerW / videoW, containerH / videoH);
+    } else if (fit === 'scale-down') {
+      ratio = Math.min(1, Math.min(containerW / videoW, containerH / videoH));
+    } else if (fit === 'none') {
+      ratio = 1;
+    } else {
+      // contain (default)
+      ratio = Math.min(containerW / videoW, containerH / videoH);
+    }
+
     const dispW = videoW * ratio;
     const dispH = videoH * ratio;
-    const offsetX = Math.max((containerW - dispW) / 2, 0);
-    const offsetY = Math.max((containerH - dispH) / 2, 0);
+    const offsetX = (containerW - dispW) / 2;
+    const offsetY = (containerH - dispH) / 2;
 
-    const localX = (clientX - rect.left) - offsetX;
-    const localY = (clientY - rect.top) - offsetY;
-    if (localX < 0 || localY < 0 || localX > dispW || localY > dispH) return null;
+    const localX = localX0 - offsetX;
+    const localY = localY0 - offsetY;
 
-    const absX = Math.max(0, Math.min(videoW, Math.round(localX * (videoW / dispW))));
-    const absY = Math.max(0, Math.min(videoH, Math.round(localY * (videoH / dispH))));
+    const clampedLocalX = Math.max(0, Math.min(dispW, localX));
+    const clampedLocalY = Math.max(0, Math.min(dispH, localY));
 
-    const x16 = Math.round((absX / videoW) * 65535);
-    const y16 = Math.round((absY / videoH) * 65535);
-    return { x16, y16 };
+    const absX = clampedLocalX * (videoW / dispW);
+    const absY = clampedLocalY * (videoH / dispH);
+    return toAbs(absX, absY);
   }
 
   /**
@@ -128,9 +143,6 @@ export class Input {
   private mouseButtonMovement = (event: Event): void => {
     const mouseEvent = event as MouseEvent;
     const down = (mouseEvent.type === 'mousedown' ? 1 : 0);
-    let mtype = "m";
-
-    if (mouseEvent.type === 'mousemove' && !this.m) return;
 
     if (!document.pointerLockElement) {
       if (this.mouseRelative) {
@@ -167,8 +179,9 @@ export class Input {
       mouseEvent.stopPropagation();
       return;
     }
+    if (!controlReady) return;
+
     if (document.pointerLockElement) {
-      mtype = "m2";
       if (this.cursorScaleFactor != null) {
         this.x = Math.trunc(mouseEvent.movementX * this.cursorScaleFactor);
         this.y = Math.trunc(mouseEvent.movementY * this.cursorScaleFactor);
@@ -177,52 +190,33 @@ export class Input {
         this.y = mouseEvent.movementY;
       }
 
-      if (controlReady && mouseEvent.type === 'mousemove' && (this.x !== 0 || this.y !== 0)) {
+      if (mouseEvent.type === 'mousemove' && (this.x !== 0 || this.y !== 0)) {
         this.control!.sendInputPacket(this.control!.encodeMouseMove(this.x, this.y));
         mouseEvent.preventDefault();
         mouseEvent.stopPropagation();
         return;
       }
     } else if (mouseEvent.type === 'mousemove') {
-      this.x = this.clientToServerX(mouseEvent.clientX);
-      this.y = this.clientToServerY(mouseEvent.clientY);
-
-      if (controlReady) {
-        const abs = this.warplayAbsMouseFromClient(mouseEvent.clientX, mouseEvent.clientY);
-        if (abs) {
-          this.control!.sendInputPacket(this.control!.encodeAbsMouse(abs.x16, abs.y16));
-          mouseEvent.preventDefault();
-          mouseEvent.stopPropagation();
-          return;
-        }
-      }
-    }
-
-    if (mouseEvent.type === 'mousedown' || mouseEvent.type === 'mouseup') {
-      if (controlReady) {
-        this.control!.sendInputPacket(this.control!.encodeMouseButton(mouseEvent.button, down === 1));
+      const abs = this.warplayAbsMouseFromClient(mouseEvent.clientX, mouseEvent.clientY);
+      if (abs) {
+        this.control!.sendInputPacket(this.control!.encodeAbsMouse(abs.x16, abs.y16));
         mouseEvent.preventDefault();
         mouseEvent.stopPropagation();
         return;
       }
+    }
+
+    if (mouseEvent.type === 'mousedown' || mouseEvent.type === 'mouseup') {
+      this.control!.sendInputPacket(this.control!.encodeMouseButton(mouseEvent.button, down === 1));
       const mask = 1 << mouseEvent.button;
       if (down) {
         this.buttonMask |= mask;
       } else {
         this.buttonMask &= ~mask;
       }
+      mouseEvent.preventDefault();
+      mouseEvent.stopPropagation();
     }
-
-    const toks = [
-      mtype,
-      this.x,
-      this.y,
-      this.buttonMask,
-      0
-    ];
-
-    this.send(toks.join(","));
-    mouseEvent.preventDefault();
   };
 
   /**
@@ -230,15 +224,13 @@ export class Input {
    */
   private touch = (event: Event): void => {
     const touchEvent = event as TouchEvent;
-    const mtype = "m";
-    const mask = 1;
     const controlConfigured = !!this.control;
     const controlReady = controlConfigured && this.control!.isConnected();
 
     if (touchEvent.type === 'touchstart') {
-      this.buttonMask |= mask;
+      this.buttonMask |= 1;
     } else if (touchEvent.type === 'touchend') {
-      this.buttonMask &= ~mask;
+      this.buttonMask &= ~1;
     } else if (touchEvent.type === 'touchmove') {
       touchEvent.preventDefault();
     }
@@ -250,32 +242,17 @@ export class Input {
       touchEvent.preventDefault();
       return;
     }
+    if (!controlReady) return;
 
-    if (controlReady) {
-      const abs = this.warplayAbsMouseFromClient(clientX, clientY);
-      if (abs) {
-        this.control!.sendInputPacket(this.control!.encodeAbsMouse(abs.x16, abs.y16));
-      }
-      if (touchEvent.type === 'touchstart') {
-        this.control!.sendInputPacket(this.control!.encodeMouseButton(0, true));
-      } else if (touchEvent.type === 'touchend') {
-        this.control!.sendInputPacket(this.control!.encodeMouseButton(0, false));
-      }
-      return;
+    const abs = this.warplayAbsMouseFromClient(clientX, clientY);
+    if (abs) {
+      this.control!.sendInputPacket(this.control!.encodeAbsMouse(abs.x16, abs.y16));
     }
-
-    this.x = this.clientToServerX(clientX);
-    this.y = this.clientToServerY(clientY);
-
-    const toks = [
-      mtype,
-      this.x,
-      this.y,
-      this.buttonMask,
-      0
-    ];
-
-    this.send(toks.join(","));
+    if (touchEvent.type === 'touchstart') {
+      this.control!.sendInputPacket(this.control!.encodeMouseButton(0, true));
+    } else if (touchEvent.type === 'touchend') {
+      this.control!.sendInputPacket(this.control!.encodeMouseButton(0, false));
+    }
   };
 
   /**
@@ -340,40 +317,7 @@ export class Input {
       event.stopPropagation();
       return;
     }
-
-    const mtype = (document.pointerLockElement ? "m2" : "m");
-    let button = 3;
-    if (event.deltaY < 0) {
-      button = 4;
-    }
-
-    let deltaY = Math.abs(Math.trunc(event.deltaY));
-
-    if (deltaY < this._smallestDeltaY && deltaY != 0) {
-      this._smallestDeltaY = deltaY;
-    }
-
-    deltaY = Math.floor(deltaY / this._smallestDeltaY);
-    const magnitude = Math.min(deltaY, this._scrollMagnitude);
-    const mask = 1 << button;
-
-    // Симулируем нажатие и отпускание кнопки
-    for (let i = 0; i < 2; i++) {
-      if (i === 0) {
-        this.buttonMask |= mask;
-      } else {
-        this.buttonMask &= ~mask;
-      }
-      const toks = [
-        mtype,
-        this.x,
-        this.y,
-        this.buttonMask,
-        magnitude
-      ];
-      this.send(toks.join(","));
-    }
-
+    // Legacy scroll-to-datachannel is removed; prevent page scroll while over the video element.
     event.preventDefault();
   };
 
@@ -422,6 +366,10 @@ export class Input {
       const vk = keyboardEvent.keyCode || 0;
       const down = keyboardEvent.type === 'keydown';
       this.control!.sendInputPacket(this.control!.encodeKey(vk, down));
+      if (vk) {
+        if (down) this.pressedKeys.add(vk);
+        else this.pressedKeys.delete(vk);
+      }
       keyboardEvent.preventDefault();
       keyboardEvent.stopPropagation();
     } else if (controlConfigured) {
@@ -430,88 +378,11 @@ export class Input {
     }
   };
 
-  /**
-   * Отправляет команду WebRTC приложению для переключения отображения удаленного указателя мыши
-   */
-  private pointerLock = (): void => {
-    if (this.control) {
-      // Cursor visibility is controlled via cursor sprite packets from control-plane.
-      return;
-    }
-    if (document.pointerLockElement !== null) {
-      this.send("p,1");
-      console.log("remote pointer visibility to: True");
-    } else {
-      this.send("p,0");
-      console.log("remote pointer visibility to: False");
-    }
-  };
-
-  /**
-   * Отправляет команду WebRTC приложению для скрытия удаленного указателя при выходе из pointer lock
-   */
   private exitPointerLock = (): void => {
-    document.exitPointerLock();
-    if (!this.control) {
-      this.send("p,0");
-      console.log("remote pointer visibility to: False");
-    }
+    try {
+      document.exitPointerLock();
+    } catch { }
   };
-
-  /**
-   * Захватывает размеры дисплея и видео, необходимые для вычисления позиции указателя мыши
-   */
-  private windowMath = (): void => {
-    const windowW = this.element.offsetWidth;
-    const windowH = this.element.offsetHeight;
-    const frameW = this.element.videoWidth;
-    const frameH = this.element.videoHeight;
-
-    const multi = Math.min(windowW / frameW, windowH / frameH);
-    const vpWidth = frameW * multi;
-    const vpHeight = (frameH * multi);
-
-    this.m = {
-      mouseMultiX: frameW / vpWidth,
-      mouseMultiY: frameH / vpHeight,
-      mouseOffsetX: Math.max((windowW - vpWidth) / 2.0, 0),
-      mouseOffsetY: Math.max((windowH - vpHeight) / 2.0, 0),
-      centerOffsetX: 0,
-      centerOffsetY: 0,
-      scrollX: window.scrollX,
-      scrollY: window.scrollY,
-      frameW,
-      frameH,
-    };
-  };
-
-  /**
-   * Переводит позицию указателя X на основе текущей математики окна
-   */
-  private clientToServerX(clientX: number): number {
-    if (!this.m) return 0;
-    let serverX = Math.round((clientX - this.m.mouseOffsetX - this.m.centerOffsetX + this.m.scrollX) * this.m.mouseMultiX);
-
-    if (serverX === this.m.frameW - 1) serverX = this.m.frameW;
-    if (serverX > this.m.frameW) serverX = this.m.frameW;
-    if (serverX < 0) serverX = 0;
-
-    return serverX;
-  }
-
-  /**
-   * Переводит позицию указателя Y на основе текущей математики окна
-   */
-  private clientToServerY(clientY: number): number {
-    if (!this.m) return 0;
-    let serverY = Math.round((clientY - this.m.mouseOffsetY - this.m.centerOffsetY + this.m.scrollY) * this.m.mouseMultiY);
-
-    if (serverY === this.m.frameH - 1) serverY = this.m.frameH;
-    if (serverY > this.m.frameH) serverY = this.m.frameH;
-    if (serverY < 0) serverY = 0;
-
-    return serverY;
-  }
 
   // Gamepad input is handled by Warplay control-plane (separate WebRTC connection).
 
@@ -533,12 +404,7 @@ export class Input {
       }
       this.requestKeyboardLock();
     }
-    // Сбрасываем локальную клавиатуру
-    if (this.keyboard !== null) {
-      this.keyboard.reset();
-    }
-    // Сбрасываем застрявшие клавиши на стороне сервера
-    this.send("kr");
+    this.resetInputState();
   };
 
   /**
@@ -570,18 +436,11 @@ export class Input {
    * Прикрепляет обработчики событий ввода к document, window и element
    */
   attach(): void {
-    this.addListener(this.element, 'resize', this.windowMath);
-    this.addListener(document, 'pointerlockchange', this.pointerLock);
     this.addListener(this.element.parentElement!, 'fullscreenchange', this.onFullscreenChange);
-    this.addListener(window, 'resize', this.windowMath);
     this.addListener(window, 'resize', this.resizeStart);
-
-    // Корректировка для scroll offset
-    this.addListener(window, 'scroll', () => {
-      if (this.m) {
-        this.m.scrollX = window.scrollX;
-        this.m.scrollY = window.scrollY;
-      }
+    this.addListener(window, 'blur', () => this.resetInputState());
+    this.addListener(document, 'visibilitychange', () => {
+      if (document.visibilityState !== 'visible') this.resetInputState();
     });
 
     this.attach_context();
@@ -597,28 +456,10 @@ export class Input {
       this.addListenerContext(window, 'touchstart', this.touch);
       this.addListenerContext(this.element, 'touchend', this.touch);
       this.addListenerContext(this.element, 'touchmove', this.touch);
-
-      if (!this.control) {
-        console.log("Enabling mouse pointer display for touch devices.");
-        this.send("p,1");
-        console.log("remote pointer visibility to: True");
-      }
     } else {
       this.addListenerContext(this.element, 'mousemove', this.mouseButtonMovement);
       this.addListenerContext(this.element, 'mousedown', this.mouseButtonMovement);
       this.addListenerContext(this.element, 'mouseup', this.mouseButtonMovement);
-    }
-
-    // Используем Guacamole.Keyboard только для legacy Selkies управления.
-    // Для Warplay control-plane клавиши отправляются через this.key (vk_code).
-    if (!this.control) {
-      this.keyboard = new Guacamole.Keyboard(window);
-      this.keyboard.onkeydown = (keysym) => {
-        this.send("kd," + keysym);
-      };
-      this.keyboard.onkeyup = (keysym) => {
-        this.send("ku," + keysym);
-      };
     }
 
     if (document.fullscreenElement !== null && document.pointerLockElement === null) {
@@ -632,8 +473,6 @@ export class Input {
         }
       );
     }
-
-    this.windowMath();
   }
 
   detach(): void {
@@ -643,16 +482,28 @@ export class Input {
 
   detach_context(): void {
     this.removeListeners(this.listeners_context);
+    this.resetInputState();
+    this.exitPointerLock();
+  }
 
-    if (this.keyboard) {
-      this.keyboard.onkeydown = null;
-      this.keyboard.onkeyup = null;
-      this.keyboard.reset();
-      this.keyboard = null;
-      this.send("kr");
+  resetInputState(): void {
+    if (!this.control || !this.control.isConnected()) {
+      this.pressedKeys.clear();
+      this.buttonMask = 0;
+      return;
     }
 
-    this.exitPointerLock();
+    for (const vk of this.pressedKeys) {
+      this.control.sendInputPacket(this.control.encodeKey(vk, false));
+    }
+    this.pressedKeys.clear();
+
+    for (let button = 0; button <= 7; button++) {
+      if (this.buttonMask & (1 << button)) {
+        this.control.sendInputPacket(this.control.encodeMouseButton(button, false));
+      }
+    }
+    this.buttonMask = 0;
   }
 
   enterFullscreen(): void {
@@ -727,7 +578,7 @@ export class Input {
   updateWindowMath(): void {
     // Используем requestAnimationFrame для обновления после того, как браузер обновит размеры
     requestAnimationFrame(() => {
-      this.windowMath();
+      // No-op: legacy window math removed (input is mapped to the video element rect).
     });
   }
 

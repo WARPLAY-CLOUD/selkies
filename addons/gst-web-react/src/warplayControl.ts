@@ -142,14 +142,14 @@ export class WarplayControl {
   sendInputPacket(pkt: Uint8Array): void {
     if (!this.inputDc || this.inputDc.readyState !== 'open') return;
     try {
-      this.inputDc.send(pkt.buffer);
+      this.inputDc.send(pkt);
     } catch { }
   }
 
   private sendGamepadPacket(pkt: Uint8Array): void {
     if (!this.gamepadDc || this.gamepadDc.readyState !== 'open') return;
     try {
-      this.gamepadDc.send(pkt.buffer);
+      this.gamepadDc.send(pkt);
     } catch { }
   }
 
@@ -471,4 +471,3 @@ export class WarplayControl {
     return out + (buf.length > n ? '…' : '');
   }
 }
-

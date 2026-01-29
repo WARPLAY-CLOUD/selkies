@@ -767,7 +767,7 @@ const App: React.FC<AppProps> = ({ connectionConfig, appConfig }) => {
     // Обработка событий окна
     const handleFocus = () => {
       if (webrtcRef.current) {
-        webrtcRef.current.sendDataChannelMessage("kr");
+        webrtcRef.current.input.resetInputState();
         navigator.clipboard.readText()
           .then(text => {
             if (webrtcRef.current) {
@@ -782,7 +782,7 @@ const App: React.FC<AppProps> = ({ connectionConfig, appConfig }) => {
 
     const handleBlur = () => {
       if (webrtcRef.current) {
-        webrtcRef.current.sendDataChannelMessage("kr");
+        webrtcRef.current.input.resetInputState();
       }
     };
 
