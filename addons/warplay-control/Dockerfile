@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.4
+#
 # Build warplay-linux-control (Rust) from sibling repo warplay-srs-server/.
 #
 # Expected build context: repository root (parent of selkies/), so that warplay-srs-server/ is available.
@@ -18,7 +20,10 @@ COPY warplay-srs-server/Cargo.toml warplay-srs-server/Cargo.lock ./warplay-srs-s
 COPY warplay-srs-server/src ./warplay-srs-server/src
 
 WORKDIR /src/warplay-srs-server
-RUN cargo build --release
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/src/warplay-srs-server/target \
+    cargo build --release
 
 FROM debian:bookworm-slim
 WORKDIR /opt
