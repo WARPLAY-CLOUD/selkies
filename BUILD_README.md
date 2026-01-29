@@ -20,7 +20,8 @@ chmod +x build.sh
 
 ### Опциональные компоненты (по умолчанию включены):
 3. **JS Interposer** (`selkies-js-interposer_*.deb`) - оптимизация джойстиков (~30 секунд сборки)
-4. **GStreamer bundle** (`gstreamer-selkies_*.tar.gz`) - кастомная сборка GStreamer (~45 минут!)
+4. **Warplay control server** (`warplay-linux-control` + overlay) - отдельный процесс управления (Rust)
+5. **GStreamer bundle** (`gstreamer-selkies_*.tar.gz`) - кастомная сборка GStreamer (~45 минут!)
 
 ## Управление сборкой
 
@@ -39,10 +40,13 @@ chmod +x build.sh
 
 ```bash
 # Собрать только минимум (Python + Web)
-BUILD_JS_INTERPOSER=false BUILD_GSTREAMER=false ./build.sh
+BUILD_JS_INTERPOSER=false BUILD_CONTROL=false BUILD_GSTREAMER=false ./build.sh
 
 # Собрать без GStreamer (но с JS Interposer)
 BUILD_GSTREAMER=false ./build.sh
+
+# Собрать без control server
+BUILD_CONTROL=false ./build.sh
 
 # Собрать без JS Interposer
 BUILD_JS_INTERPOSER=false ./build.sh
@@ -70,6 +74,9 @@ dist/
 ├── selkies_gstreamer-1.6.2+w-py3-none-any.whl            # Python пакет
 ├── gst-web_v1.6.2+w.tar.gz                               # Web интерфейс
 ├── selkies-js-interposer_1.6.2+w_ubuntu24.04_amd64.deb  # JS Interposer (опц.)
+├── warplay-linux-control                                 # Control server (опц.)
+├── warplay-linux-control_v1.6.2+w_amd64.tar.gz           # Control server tarball (опц.)
+└── copy_to_docker/usr/local/bin/warplay-linux-control     # Overlay для docker-selkies-* (опц.)
 └── gstreamer-selkies_gpl_v1.6.2+w_ubuntu24.04_amd64.tar.gz  # GStreamer (опц.)
 ```
 
@@ -158,4 +165,3 @@ BUILD_GSTREAMER=false ./build.sh
 ## Лицензия
 
 Mozilla Public License 2.0 (MPL-2.0)
-

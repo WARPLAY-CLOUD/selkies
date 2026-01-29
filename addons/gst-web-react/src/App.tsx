@@ -1,8 +1,9 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { WebRTCDemo } from './webrtc';
 import { WebRTCDemoSignalling } from './signalling';
-import { ConnectionConfig, getConnectionConfig, createSignallingUrl } from './config';
+import { ConnectionConfig, getConnectionConfig, createSignallingUrl, createControlSignallingUrl } from './config';
 import { stringToBase64 } from './util';
+import { WarplayControl } from './warplayControl';
 import './App.css';
 
 export interface AppProps {
@@ -90,6 +91,7 @@ const App: React.FC<AppProps> = ({ connectionConfig, appConfig }) => {
   const audioElementRef = useRef<HTMLAudioElement>(null);
   const webrtcRef = useRef<WebRTCDemo | null>(null);
   const audioWebrtcRef = useRef<WebRTCDemo | null>(null);
+  const controlRef = useRef<WarplayControl | null>(null);
   const statWatchIntervalRef = useRef<number | null>(null);
   const metricsIntervalRef = useRef<number | null>(null);
   const initializedRef = useRef<boolean>(false);
@@ -400,13 +402,6 @@ const App: React.FC<AppProps> = ({ connectionConfig, appConfig }) => {
         
         if (webrtc.input) {
           webrtc.input.setCallbacks({
-            ongamepadconnected: (gamepadId) => {
-              webrtc.setCallbacks({ onstatus: (msg) => console.log(msg) });
-              setGamepad({ gamepadState: "connected", gamepadName: gamepadId });
-            },
-            ongamepaddisconnected: () => {
-              setGamepad({ gamepadState: "disconnected", gamepadName: "none" });
-            },
             onmenuhotkey: () => {
               setShowDrawer(prev => !prev);
             },
@@ -716,6 +711,56 @@ const App: React.FC<AppProps> = ({ connectionConfig, appConfig }) => {
       setDebugEntries(prev => [...prev, applyTimestamp("[app] no TURN servers provided, using default STUN.")]);
     }
 
+    // Warplay control-plane (mouse/keyboard/gamepad/cursor) over a separate WebRTC connection.
+    if (config.controlEnabled) {
+      const controlWsUrl = createControlSignallingUrl(config);
+      const controlRtcConfig: RTCConfiguration = (iceServers.length > 0)
+        ? { iceServers: iceServers, iceTransportPolicy: turnSwitch ? 'relay' : 'all' }
+        : webrtc.rtcPeerConfig;
+
+      const control = new WarplayControl({ wsUrl: controlWsUrl, rtcConfig: controlRtcConfig });
+      controlRef.current = control;
+
+      control.setCallbacks({
+        onstatus: (msg) => setDebugEntries(prev => [...prev, applyTimestamp(msg)]),
+        onerror: (msg) => setLogEntries(prev => [...prev, applyTimestamp(`[control] [ERROR] ${msg}`)]),
+        oncursor: (handle, curdata, hotspot, override) => {
+          // Reuse the same cursor rendering approach (base64 PNG into CSS cursor).
+          if (!videoElementRef.current) return;
+          const video = videoElementRef.current;
+          if (parseInt(String(handle)) === 0) {
+            video.style.cursor = "auto";
+            return;
+          }
+          if (override) {
+            video.style.cursor = override;
+            return;
+          }
+          if (!webrtc.cursor_cache.has(handle)) {
+            const cursor_url = `url('data:image/png;base64,${curdata}')`;
+            webrtc.cursor_cache.set(handle, cursor_url);
+          }
+          let cursor_url = webrtc.cursor_cache.get(handle)!;
+          if (hotspot) {
+            cursor_url += ` ${hotspot.x} ${hotspot.y}, auto`;
+          } else {
+            cursor_url += ", auto";
+          }
+          video.style.cursor = cursor_url;
+        },
+        ongamepadconnected: (gamepadId) => setGamepad({ gamepadState: "connected", gamepadName: gamepadId }),
+        ongamepaddisconnected: () => setGamepad({ gamepadState: "disconnected", gamepadName: "none" }),
+      });
+
+      control.connect();
+      webrtc.input.setControl(control);
+      audioWebrtc.input.setControl(control);
+    } else {
+      controlRef.current = null;
+      webrtc.input.setControl(null);
+      audioWebrtc.input.setControl(null);
+    }
+
     webrtc.connect();
     audioWebrtc.connect();
 
@@ -817,6 +862,11 @@ const App: React.FC<AppProps> = ({ connectionConfig, appConfig }) => {
       }
       if (webrtcRef.current?.input) {
         webrtcRef.current.input.detach();
+      }
+
+      if (controlRef.current) {
+        controlRef.current.disconnect();
+        controlRef.current = null;
       }
       
       // Закрываем соединения только если они не активны
@@ -1328,4 +1378,3 @@ const App: React.FC<AppProps> = ({ connectionConfig, appConfig }) => {
 };
 
 export default App;
-

@@ -16,6 +16,15 @@ export interface ConnectionConfig {
   basePath?: string;
   /** ICE сервера для WebRTC */
   iceServers?: RTCIceServer[];
+  /**
+   * WebSocket URL для control-plane (warplay control).
+   * Если не задан, будет построен из host/port/secure и controlSignallingPath.
+   */
+  controlSignallingUrl?: string;
+  /** Путь прокси до control-plane websocket на том же origin (по умолчанию "/control/ws"). */
+  controlSignallingPath?: string;
+  /** Включить ли control-plane (по умолчанию true). */
+  controlEnabled?: boolean;
 }
 
 /**
@@ -64,6 +73,9 @@ export function getConnectionConfig(config?: AppConfig): ConnectionConfig {
   const portParam = urlParams.get('port');
   const appParam = urlParams.get('app');
   const secureParam = urlParams.get('secure');
+  const controlEnabledParam = urlParams.get('control');
+  const controlWsParam = urlParams.get('control_ws');
+  const controlPathParam = urlParams.get('control_path');
 
   // TURN параметры из URL
   const turnHost = urlParams.get('turn_host');
@@ -108,6 +120,18 @@ export function getConnectionConfig(config?: AppConfig): ConnectionConfig {
     basePath: '/',
   };
 
+  // control-plane websocket (warplay control server)
+  if (controlWsParam) {
+    connectionConfig.controlSignallingUrl = controlWsParam;
+  } else {
+    connectionConfig.controlSignallingPath = controlPathParam || '/control/ws';
+  }
+  if (controlEnabledParam) {
+    connectionConfig.controlEnabled = controlEnabledParam !== 'false';
+  } else {
+    connectionConfig.controlEnabled = true;
+  }
+
   if (turnHost) {
     const tPort = turnPort ? `:${turnPort}` : '';
     connectionConfig.iceServers = [{
@@ -132,4 +156,18 @@ export function createSignallingUrl(config: ConnectionConfig): string {
   return `${protocol}://${config.host}${port}${basePath}${appName}/signalling/`;
 }
 
+/**
+ * Создать URL для WebSocket control-plane (warplay control server).
+ * Предполагается, что NGINX проксирует его на внутренний WS signalling сервера.
+ */
+export function createControlSignallingUrl(config: ConnectionConfig): string {
+  if (config.controlSignallingUrl) {
+    return config.controlSignallingUrl;
+  }
+  const protocol = config.secure ? 'wss' : 'ws';
+  const port = config.port ? `:${config.port}` : '';
+  const basePath = config.basePath || '/';
+  const path = (config.controlSignallingPath || '/control/ws').replace(/^\//, '');
+  return `${protocol}://${config.host}${port}${basePath}${path}`;
+}
 

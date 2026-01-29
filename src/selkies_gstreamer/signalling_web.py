@@ -33,6 +33,7 @@ import base64
 
 import websockets
 import websockets.asyncio.server
+import websockets.asyncio.client
 
 logger = logging.getLogger("signaling")
 web_logger = logging.getLogger("web")
@@ -119,6 +120,12 @@ class WebRTCSimpleServer(object):
         self.https_key = options.https_key
         self.health_path = options.health
         self.web_root = options.web_root
+
+        # Warplay control-plane WS proxy settings.
+        # Browser connects to /control/ws on the Selkies server; Selkies proxies frames to the local control server.
+        self.control_ws_proxy_enabled = str(getattr(options, "control_ws_proxy_enabled", os.environ.get("SELKIES_CONTROL_WS_PROXY_ENABLED", "true"))).lower() != "false"
+        self.control_ws_proxy_host = getattr(options, "control_ws_proxy_host", os.environ.get("SELKIES_CONTROL_WS_PROXY_HOST", "127.0.0.1"))
+        self.control_ws_proxy_port = int(getattr(options, "control_ws_proxy_port", os.environ.get("SELKIES_CONTROL_SIGNALING_PORT", "8787")))
 
         # Certificate mtime, used to detect when to restart the server
         self.cert_mtime = -1
@@ -235,7 +242,11 @@ class WebRTCSimpleServer(object):
             set_cors_headers(response_headers)
             
             # WebSocket paths - пропускаем
-            if path == "/ws/" or path == "/ws" or path.endswith("/signalling/") or path.endswith("/signalling"):
+            if (
+                path == "/ws/" or path == "/ws"
+                or path.endswith("/signalling/") or path.endswith("/signalling")
+                or path == "/control/ws/" or path == "/control/ws"
+            ):
                 return None
         except Exception as e:
             logger.error(f"Error in process_request: {e}")
@@ -536,6 +547,16 @@ class WebRTCSimpleServer(object):
             '''
             raddr = ws.remote_address
             logger.info("Connected to {!r}".format(raddr))
+
+            # Proxy /control/ws to the external warplay control server (separate process).
+            try:
+                path = getattr(getattr(ws, "request", None), "path", None)
+            except Exception:
+                path = None
+            if self.control_ws_proxy_enabled and path in ("/control/ws", "/control/ws/"):
+                await self.control_ws_proxy_handler(ws)
+                return
+
             peer_id, meta = await self.hello_peer(ws)
             try:
                 await self.connection_handler(ws, peer_id, meta)
@@ -575,6 +596,47 @@ class WebRTCSimpleServer(object):
         self.server.close()
         await self.server.wait_closed()
         logger.info('Stopped.')
+
+    async def control_ws_proxy_handler(self, client_ws):
+        """
+        Bidirectional WS proxy for Warplay control-plane signaling.
+
+        Client connects to Selkies at /control/ws, Selkies connects to local control server at ws://host:port/ws
+        and proxies text/binary frames as-is.
+        """
+        backend_uri = f"ws://{self.control_ws_proxy_host}:{self.control_ws_proxy_port}/ws"
+        logger.info(f"Proxying control WS to: {backend_uri}")
+
+        try:
+            backend_ws = await websockets.asyncio.client.connect(backend_uri)
+        except Exception as e:
+            logger.error(f"control ws proxy connect failed: {e}")
+            try:
+                await client_ws.close(code=1011, reason="control server unavailable")
+            except Exception:
+                pass
+            return
+
+        async def pump(src, dst):
+            async for msg in src:
+                try:
+                    await dst.send(msg)
+                except Exception:
+                    break
+
+        t1 = asyncio.create_task(pump(client_ws, backend_ws))
+        t2 = asyncio.create_task(pump(backend_ws, client_ws))
+        done, pending = await asyncio.wait({t1, t2}, return_when=asyncio.FIRST_COMPLETED)
+        for t in pending:
+            t.cancel()
+        try:
+            await backend_ws.close()
+        except Exception:
+            pass
+        try:
+            await client_ws.close()
+        except Exception:
+            pass
 
     def check_cert_changed(self):
         cert_pem, key_pem = self.get_https_certs()

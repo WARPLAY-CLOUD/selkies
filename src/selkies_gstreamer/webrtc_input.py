@@ -80,9 +80,12 @@ class WebRTCInputError(Exception):
 
 
 class WebRTCInput:
-    def __init__(self, uinput_mouse_socket_path="", js_socket_path="", enable_clipboard="", enable_cursors=True, cursor_size=16, cursor_scale=1.0, cursor_debug=False, enable_uinput_gamepad=False, uinput_device="/dev/uinput"):
+    def __init__(self, uinput_mouse_socket_path="", js_socket_path="", enable_clipboard="", enable_cursors=True, cursor_size=16, cursor_scale=1.0, cursor_debug=False, enable_uinput_gamepad=False, uinput_device="/dev/uinput", enable_input=False):
         """Initializes WebRTC input instance
         """
+
+        # When disabled, all interactive control paths (keyboard/mouse/gamepad) are ignored.
+        self.enable_input = enable_input
 
         self.clipboard_running = False
         self.uinput_mouse_socket_path = uinput_mouse_socket_path
@@ -229,12 +232,13 @@ class WebRTCInput:
         # Create connection to the X11 server provided by the DISPLAY env var.
         self.xdisplay = display.Display()
 
-        self.__keyboard_connect()
+        if self.enable_input:
+            self.__keyboard_connect()
 
-        # Clear any stuck modifier keys
-        self.reset_keyboard()
+            # Clear any stuck modifier keys
+            self.reset_keyboard()
 
-        self.__mouse_connect()
+            self.__mouse_connect()
 
     async def disconnect(self):
         await self.__js_disconnect()
@@ -594,15 +598,23 @@ class WebRTCInput:
             self.on_ping_response(latency)
         elif toks[0] == "kd":
             # Key down
+            if not self.enable_input:
+                return
             self.send_x11_keypress(int(toks[1]), down=True)
         elif toks[0] == "ku":
             # Key up
+            if not self.enable_input:
+                return
             self.send_x11_keypress(int(toks[1]), down=False)
         elif toks[0] == "kr":
             # Keyboard reset
+            if not self.enable_input:
+                return
             self.reset_keyboard()
         elif toks[0] in ["m", "m2"]:
             # Mouse action
+            if not self.enable_input:
+                return
             # x,y,button_mask
             relative = False
             if toks[0] == "m2":
@@ -635,6 +647,8 @@ class WebRTCInput:
             # Joystick
             # button: b,<btn_num>,<value>
             # axis: a,<axis_num>,<value>
+            if not self.enable_input:
+                return
             if toks[1] == 'c':
                 js_num = int(toks[2])
                 name = base64.b64decode(toks[3]).decode()[:255]

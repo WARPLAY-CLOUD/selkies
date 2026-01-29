@@ -14,6 +14,7 @@
 #   GSTREAMER_BUNDLE_SOURCE=build ./build.sh      # Всегда собирать GStreamer локально (медленно)
 #   GSTREAMER_BUNDLE_SOURCE=auto ./build.sh       # (по умолчанию) взять локальный bundle -> CDN -> build
 #   BUILD_JS_INTERPOSER=false ./build.sh          # Пропустить JS Interposer
+#   BUILD_CONTROL=false ./build.sh                # Пропустить Warplay control server (Rust)
 #   SELKIES_VERSION=1.7.0 ./build.sh              # Задать свою версию
 #   DISTRIB_RELEASE=22.04 ./build.sh              # Для Ubuntu 22.04
 
@@ -40,6 +41,7 @@ ARCH="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
 BUILD_PYTHON=${BUILD_PYTHON:-true}
 BUILD_WEB=${BUILD_WEB:-true}
 BUILD_JS_INTERPOSER=${BUILD_JS_INTERPOSER:-true}
+BUILD_CONTROL=${BUILD_CONTROL:-true}
 BUILD_GSTREAMER=${BUILD_GSTREAMER:-true}
 WEB_VARIANT=${WEB_VARIANT:-gst-web-react}  # gst-web-react (по умолчанию) или gst-web
 # Где брать GStreamer bundle:
@@ -98,6 +100,7 @@ echo -e "${BLUE}Что будет собрано:${NC}"
 echo "  [$([ "$BUILD_PYTHON" = "true" ] && echo "x" || echo " ")] Python wheel (обязательный)"
 echo "  [$([ "$BUILD_WEB" = "true" ] && echo "x" || echo " ")] Web интерфейс (обязательный) - ${WEB_VARIANT}"
 echo "  [$([ "$BUILD_JS_INTERPOSER" = "true" ] && echo "x" || echo " ")] JS Interposer (опционально, ~30 сек)"
+echo "  [$([ "$BUILD_CONTROL" = "true" ] && echo "x" || echo " ")] Warplay control server (опционально, Rust)"
 echo "  [$([ "$BUILD_GSTREAMER" = "true" ] && echo "x" || echo " ")] GStreamer bundle (опционально, ~45 мин, можно пропустить)"
 echo ""
 if [ "$BUILD_GSTREAMER" = "true" ]; then
@@ -112,7 +115,7 @@ mkdir -p "${REPO_ROOT}/dist"
 # 1. Python wheel - py-build образ
 # ========================================
 if [ "$BUILD_PYTHON" = "true" ]; then
-    echo -e "${GREEN}[1/4] Сборка Python wheel...${NC}"
+    echo -e "${GREEN}[1/5] Сборка Python wheel...${NC}"
     
     # Собрать Docker образ py-build
     docker build \
@@ -154,7 +157,7 @@ fi
 # 2. Web интерфейс - gst-web или gst-web-react
 # ========================================
 if [ "$BUILD_WEB" = "true" ]; then
-    echo -e "${GREEN}[2/4] Сборка Web интерфейса (${WEB_VARIANT})...${NC}"
+    echo -e "${GREEN}[2/5] Сборка Web интерфейса (${WEB_VARIANT})...${NC}"
     
     # Определяем Dockerfile и образ
     if [ "$WEB_VARIANT" = "gst-web-react" ]; then
@@ -245,7 +248,7 @@ fi
 # 3. JS Interposer (DEB пакет)
 # ========================================
 if [ "$BUILD_JS_INTERPOSER" = "true" ]; then
-    echo -e "${GREEN}[3/4] Сборка JS Interposer...${NC}"
+    echo -e "${GREEN}[3/5] Сборка JS Interposer...${NC}"
     
     JS_BUILT=false
     JS_EFFECTIVE_RELEASE=""
@@ -291,12 +294,66 @@ if [ "$BUILD_JS_INTERPOSER" = "true" ]; then
     fi
     echo ""
 else
-    echo -e "${BLUE}[3/4] JS Interposer пропущен (отключен)${NC}"
+    echo -e "${BLUE}[3/5] JS Interposer пропущен (отключен)${NC}"
     echo ""
 fi
 
 # ========================================
-# 4. GStreamer bundle (долгая сборка!)
+# 4. Warplay control server (Rust) - warplay-linux-control
+# ========================================
+if [ "$BUILD_CONTROL" = "true" ]; then
+    echo -e "${GREEN}[4/5] Сборка Warplay control server (warplay-linux-control)...${NC}"
+
+    CONTROL_IMAGE="warplay-control-build:latest"
+    CONTROL_BIN_NAME="warplay-linux-control"
+    CONTROL_OUT="${REPO_ROOT}/dist/${CONTROL_BIN_NAME}"
+
+    CONTROL_CONTEXT="${REPO_ROOT}/.."
+    CONTROL_DOCKERFILE="${REPO_ROOT}/addons/warplay-control/Dockerfile"
+
+    if [ ! -f "${CONTROL_DOCKERFILE}" ]; then
+        echo -e "${RED}  ✗ Dockerfile для control server не найден: ${CONTROL_DOCKERFILE}${NC}"
+        exit 1
+    fi
+
+    echo -e "${CYAN}  → Сборка Docker образа control server...${NC}"
+    docker build \
+        -t "${CONTROL_IMAGE}" \
+        -f "${CONTROL_DOCKERFILE}" \
+        "${CONTROL_CONTEXT}" 2>&1 | grep -E "(Step|Successfully|Downloading|Compiling)" || true
+    BUILD_STATUS="${PIPESTATUS[0]}"
+    if [ "${BUILD_STATUS}" -ne 0 ]; then
+        echo -e "${RED}  ✗ Docker build control server failed${NC}"
+        exit 1
+    fi
+
+    echo -e "${CYAN}  → Извлечение бинарника из образа...${NC}"
+    CONTAINER_ID=$(docker create "${CONTROL_IMAGE}")
+    docker cp "${CONTAINER_ID}:/opt/${CONTROL_BIN_NAME}" "${CONTROL_OUT}" || {
+        echo -e "${RED}  ✗ Не удалось извлечь ${CONTROL_BIN_NAME}${NC}"
+        docker rm "${CONTAINER_ID}" >/dev/null
+        exit 1
+    }
+    docker rm "${CONTAINER_ID}" >/dev/null
+    chmod +x "${CONTROL_OUT}" || true
+
+    echo -e "${GREEN}  ✓ Control binary: ${CONTROL_OUT}${NC}"
+
+    OVERLAY_DIR="${REPO_ROOT}/dist/copy_to_docker/usr/local/bin"
+    mkdir -p "${OVERLAY_DIR}"
+    cp -f "${CONTROL_OUT}" "${OVERLAY_DIR}/${CONTROL_BIN_NAME}"
+
+    tar -czf "${REPO_ROOT}/dist/${CONTROL_BIN_NAME}_v${VERSION}_${ARCH}.tar.gz" -C "${REPO_ROOT}/dist" "${CONTROL_BIN_NAME}"
+    echo -e "${GREEN}  ✓ Overlay: dist/copy_to_docker/usr/local/bin/${CONTROL_BIN_NAME}${NC}"
+    echo -e "${GREEN}  ✓ Tarball: dist/${CONTROL_BIN_NAME}_v${VERSION}_${ARCH}.tar.gz${NC}"
+    echo ""
+else
+    echo -e "${BLUE}[4/5] Warplay control server пропущен (отключен)${NC}"
+    echo ""
+fi
+
+# ========================================
+# 5. GStreamer bundle (долгая сборка!)
 # ========================================
 SELKIES_CDN_BASE_URL=${SELKIES_CDN_BASE_URL:-"https://cdn.warplay.cloud/drivers/linux/system/selkies/releases/download/v${VERSION}"}
 
@@ -341,7 +398,7 @@ select_gstreamer_release || true
 # 4a) Reuse local bundle / download from CDN (cache in dist/) before attempting a long local build.
 if [ "${GSTREAMER_BUNDLE_SOURCE}" != "build" ]; then
     if select_gstreamer_release; then
-        echo -e "${BLUE}[4/4] GStreamer bundle уже есть в dist/ (Ubuntu ${GSTREAMER_EFFECTIVE_RELEASE}), пропускаем сборку${NC}"
+        echo -e "${BLUE}[5/5] GStreamer bundle уже есть в dist/ (Ubuntu ${GSTREAMER_EFFECTIVE_RELEASE}), пропускаем сборку${NC}"
         BUILD_GSTREAMER=false
     fi
 
@@ -359,7 +416,7 @@ if [ "${GSTREAMER_BUNDLE_SOURCE}" != "build" ]; then
                     GSTREAMER_TARBALL_NAME="gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${REL}_${ARCH}.tar.gz"
                     GSTREAMER_TARBALL="${REPO_ROOT}/dist/${GSTREAMER_TARBALL_NAME}"
                     GSTREAMER_CDN_URL="${SELKIES_CDN_BASE_URL}/${GSTREAMER_TARBALL_NAME}"
-                    echo -e "${BLUE}[4/4] Найден локальный GStreamer bundle (Ubuntu ${REL}): ${CAND}${NC}"
+                    echo -e "${BLUE}[5/5] Найден локальный GStreamer bundle (Ubuntu ${REL}): ${CAND}${NC}"
                     mkdir -p "${REPO_ROOT}/dist"
                     cp -f "${CAND}" "${GSTREAMER_TARBALL}" || true
                     if validate_gstreamer_bundle "${GSTREAMER_TARBALL}"; then
@@ -375,7 +432,7 @@ if [ "${GSTREAMER_BUNDLE_SOURCE}" != "build" ]; then
     fi
 
     if [ "$BUILD_GSTREAMER" = "true" ]; then
-        echo -e "${CYAN}[4/4] GStreamer bundle не найден, пробуем скачать с CDN...${NC}"
+        echo -e "${CYAN}[5/5] GStreamer bundle не найден, пробуем скачать с CDN...${NC}"
         for REL in $(release_fallbacks); do
             GSTREAMER_EFFECTIVE_RELEASE="${REL}"
             GSTREAMER_TARBALL_NAME="gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${REL}_${ARCH}.tar.gz"
@@ -404,7 +461,7 @@ if [ "${GSTREAMER_BUNDLE_SOURCE}" != "build" ]; then
 fi
 
 if [ "$BUILD_GSTREAMER" = "true" ] && [ "${GSTREAMER_BUNDLE_SOURCE}" != "cdn" ]; then
-    echo -e "${GREEN}[4/4] Сборка GStreamer bundle...${NC}"
+    echo -e "${GREEN}[5/5] Сборка GStreamer bundle...${NC}"
     echo -e "${YELLOW}  ⚠ ВНИМАНИЕ: Это займет 30-60 минут!${NC}"
     echo -e "${YELLOW}  ⚠ Нажмите Ctrl+C в течение 10 секунд, чтобы пропустить...${NC}"
     

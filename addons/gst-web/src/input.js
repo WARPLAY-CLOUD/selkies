@@ -45,6 +45,12 @@ class Input {
         this.send = send;
 
         /**
+         * View-only mode: do not capture or send keyboard/mouse/gamepad input.
+         * @type {boolean}
+         */
+        this.enableControls = false;
+
+        /**
          * @type {boolean}
          */
         this.mouseRelative = false;
@@ -414,6 +420,7 @@ class Input {
      * Sends WebRTC app command to toggle display of the remote mouse pointer.
      */
     _pointerLock() {
+        if (!this.enableControls) return;
         if (document.pointerLockElement !== null) {
             this.send("p,1");
             console.log("remote pointer visibility to: True");
@@ -427,7 +434,10 @@ class Input {
      * Sends WebRTC app command to hide the remote pointer when exiting pointer lock.
      */
     _exitPointerLock() {
-        document.exitPointerLock();
+        if (!this.enableControls) return;
+        if (document.pointerLockElement !== null) {
+            document.exitPointerLock();
+        }
         // hide the pointer.
         this.send("p,0");
         console.log("remote pointer visibility to: False");
@@ -553,7 +563,7 @@ class Input {
      * When fullscreen is entered, request keyboard and pointer lock.
      */
     _onFullscreenChange() {
-        if (document.fullscreenElement !== null) {
+        if (this.enableControls && document.fullscreenElement !== null) {
             if (document.pointerLockElement === null) {
                 this.element.requestPointerLock().then(
                     () => {
@@ -573,7 +583,9 @@ class Input {
         }
 
         // Reset stuck keys on server side.
-        this.send("kr");
+        if (this.enableControls) {
+            this.send("kr");
+        }
     }
 
     /**
@@ -606,14 +618,16 @@ class Input {
      */
     attach() {
         this.listeners.push(addListener(this.element, 'resize', this._windowMath, this));
-        this.listeners.push(addListener(document, 'pointerlockchange', this._pointerLock, this));
         this.listeners.push(addListener(this.element.parentElement, 'fullscreenchange', this._onFullscreenChange, this));
         this.listeners.push(addListener(window, 'resize', this._windowMath, this));
         this.listeners.push(addListener(window, 'resize', this._resizeStart, this));
 
-        // Gamepad support
-        this.listeners.push(addListener(window, 'gamepadconnected', this._gamepadConnected, this));
-        this.listeners.push(addListener(window, 'gamepaddisconnected', this._gamepadDisconnect, this));
+        if (this.enableControls) {
+            this.listeners.push(addListener(document, 'pointerlockchange', this._pointerLock, this));
+            // Gamepad support
+            this.listeners.push(addListener(window, 'gamepadconnected', this._gamepadConnected, this));
+            this.listeners.push(addListener(window, 'gamepaddisconnected', this._gamepadDisconnect, this));
+        }
 
         // Adjust for scroll offset
         this.listeners.push(addListener(window, 'scroll', () => {
@@ -621,7 +635,11 @@ class Input {
             this.m.scrollY = window.scrollY;
         }, this));
 
-        this.attach_context();
+        if (this.enableControls) {
+            this.attach_context();
+        } else {
+            this._windowMath();
+        }
     }
 
     attach_context() {
@@ -671,11 +689,17 @@ class Input {
     detach() {
         removeListeners(this.listeners);
 
-        this.detach_context();
+        if (this.enableControls) {
+            this.detach_context();
+        } else {
+            removeListeners(this.listeners_context);
+        }
     }
 
     detach_context() {
         removeListeners(this.listeners_context);
+
+        if (!this.enableControls) return;
 
         if (this.keyboard) {
             this.keyboard.onkeydown = null;
@@ -689,17 +713,6 @@ class Input {
     }
 
     enterFullscreen() {
-        if (document.pointerLockElement === null) {
-            this.element.requestPointerLock().then(
-                () => {
-                    console.log("pointer lock success");
-                }
-            ).catch(
-                (e) => {
-                    console.log("pointer lock failed: ", e);
-                }
-            );
-        }
         if (document.fullscreenElement === null) {
             this.element.parentElement.requestFullscreen().then(
                 () => {

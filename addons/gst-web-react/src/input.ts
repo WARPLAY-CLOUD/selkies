@@ -2,14 +2,12 @@
  * Обработка ввода для WebRTC веб-приложения
  */
 
-import { GamepadManager } from './gamepad';
 import { Queue } from './util';
+import type { WarplayControl } from './warplayControl';
 
 export interface InputCallbacks {
   onmenuhotkey?: () => void;
   onfullscreenhotkey?: () => void;
-  ongamepadconnected?: (gamepadId: string) => void;
-  ongamepaddisconnected?: () => void;
   onresizeend?: () => void;
 }
 
@@ -32,11 +30,11 @@ type Listener = [EventTarget, string, EventListener];
 export class Input {
   public element: HTMLVideoElement;
   private send: (data: string) => void;
+  private control: WarplayControl | null = null;
   public mouseRelative: boolean = false;
   public m: WindowMath | null = null;
   private buttonMask: number = 0;
   private keyboard: Guacamole.Keyboard | null = null;
-  private gamepadManager: GamepadManager | null = null;
   public x: number = 0;
   public y: number = 0;
   public cursorScaleFactor: number | null = null;
@@ -63,8 +61,40 @@ export class Input {
     this.send = send;
   }
 
+  setControl(control: WarplayControl | null): void {
+    this.control = control;
+  }
+
   setCallbacks(callbacks: InputCallbacks): void {
     this.callbacks = { ...this.callbacks, ...callbacks };
+  }
+
+  private warplayAbsMouseFromClient(clientX: number, clientY: number): { x16: number; y16: number } | null {
+    const videoW = this.element.videoWidth;
+    const videoH = this.element.videoHeight;
+    if (!videoW || !videoH) return null;
+
+    const rect = this.element.getBoundingClientRect();
+    const containerW = rect.width;
+    const containerH = rect.height;
+    if (!containerW || !containerH) return null;
+
+    const ratio = Math.min(containerW / videoW, containerH / videoH);
+    const dispW = videoW * ratio;
+    const dispH = videoH * ratio;
+    const offsetX = Math.max((containerW - dispW) / 2, 0);
+    const offsetY = Math.max((containerH - dispH) / 2, 0);
+
+    const localX = (clientX - rect.left) - offsetX;
+    const localY = (clientY - rect.top) - offsetY;
+    if (localX < 0 || localY < 0 || localX > dispW || localY > dispH) return null;
+
+    const absX = Math.max(0, Math.min(videoW, Math.round(localX * (videoW / dispW))));
+    const absY = Math.max(0, Math.min(videoH, Math.round(localY * (videoH / dispH))));
+
+    const x16 = Math.round((absX / videoW) * 65535);
+    const y16 = Math.round((absY / videoH) * 65535);
+    return { x16, y16 };
   }
 
   /**
@@ -130,6 +160,13 @@ export class Input {
       return;
     }
 
+    const controlConfigured = !!this.control;
+    const controlReady = controlConfigured && this.control!.isConnected();
+    if (controlConfigured && !controlReady) {
+      mouseEvent.preventDefault();
+      mouseEvent.stopPropagation();
+      return;
+    }
     if (document.pointerLockElement) {
       mtype = "m2";
       if (this.cursorScaleFactor != null) {
@@ -139,12 +176,35 @@ export class Input {
         this.x = mouseEvent.movementX;
         this.y = mouseEvent.movementY;
       }
+
+      if (controlReady && mouseEvent.type === 'mousemove' && (this.x !== 0 || this.y !== 0)) {
+        this.control!.sendInputPacket(this.control!.encodeMouseMove(this.x, this.y));
+        mouseEvent.preventDefault();
+        mouseEvent.stopPropagation();
+        return;
+      }
     } else if (mouseEvent.type === 'mousemove') {
       this.x = this.clientToServerX(mouseEvent.clientX);
       this.y = this.clientToServerY(mouseEvent.clientY);
+
+      if (controlReady) {
+        const abs = this.warplayAbsMouseFromClient(mouseEvent.clientX, mouseEvent.clientY);
+        if (abs) {
+          this.control!.sendInputPacket(this.control!.encodeAbsMouse(abs.x16, abs.y16));
+          mouseEvent.preventDefault();
+          mouseEvent.stopPropagation();
+          return;
+        }
+      }
     }
 
     if (mouseEvent.type === 'mousedown' || mouseEvent.type === 'mouseup') {
+      if (controlReady) {
+        this.control!.sendInputPacket(this.control!.encodeMouseButton(mouseEvent.button, down === 1));
+        mouseEvent.preventDefault();
+        mouseEvent.stopPropagation();
+        return;
+      }
       const mask = 1 << mouseEvent.button;
       if (down) {
         this.buttonMask |= mask;
@@ -172,6 +232,8 @@ export class Input {
     const touchEvent = event as TouchEvent;
     const mtype = "m";
     const mask = 1;
+    const controlConfigured = !!this.control;
+    const controlReady = controlConfigured && this.control!.isConnected();
 
     if (touchEvent.type === 'touchstart') {
       this.buttonMask |= mask;
@@ -181,8 +243,29 @@ export class Input {
       touchEvent.preventDefault();
     }
 
-    this.x = this.clientToServerX(touchEvent.changedTouches[0].clientX);
-    this.y = this.clientToServerY(touchEvent.changedTouches[0].clientY);
+    const clientX = touchEvent.changedTouches[0].clientX;
+    const clientY = touchEvent.changedTouches[0].clientY;
+
+    if (controlConfigured && !controlReady) {
+      touchEvent.preventDefault();
+      return;
+    }
+
+    if (controlReady) {
+      const abs = this.warplayAbsMouseFromClient(clientX, clientY);
+      if (abs) {
+        this.control!.sendInputPacket(this.control!.encodeAbsMouse(abs.x16, abs.y16));
+      }
+      if (touchEvent.type === 'touchstart') {
+        this.control!.sendInputPacket(this.control!.encodeMouseButton(0, true));
+      } else if (touchEvent.type === 'touchend') {
+        this.control!.sendInputPacket(this.control!.encodeMouseButton(0, false));
+      }
+      return;
+    }
+
+    this.x = this.clientToServerX(clientX);
+    this.y = this.clientToServerY(clientY);
 
     const toks = [
       mtype,
@@ -244,6 +327,20 @@ export class Input {
    * Обрабатывает события колесика мыши
    */
   private mouseWheel = (event: WheelEvent): void => {
+    const controlConfigured = !!this.control;
+    const controlReady = controlConfigured && this.control!.isConnected();
+    if (controlConfigured && !controlReady) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    if (controlReady) {
+      this.control!.sendInputPacket(this.control!.encodeWheel(-event.deltaY));
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+
     const mtype = (document.pointerLockElement ? "m2" : "m");
     let button = 3;
     if (event.deltaY < 0) {
@@ -317,12 +414,30 @@ export class Input {
       }
       return;
     }
+
+    const controlConfigured = !!this.control;
+    const controlReady = controlConfigured && this.control!.isConnected();
+    if (controlReady) {
+      // warplay control expects vk_code (u16). Use legacy keyCode for compatibility.
+      const vk = keyboardEvent.keyCode || 0;
+      const down = keyboardEvent.type === 'keydown';
+      this.control!.sendInputPacket(this.control!.encodeKey(vk, down));
+      keyboardEvent.preventDefault();
+      keyboardEvent.stopPropagation();
+    } else if (controlConfigured) {
+      keyboardEvent.preventDefault();
+      keyboardEvent.stopPropagation();
+    }
   };
 
   /**
    * Отправляет команду WebRTC приложению для переключения отображения удаленного указателя мыши
    */
   private pointerLock = (): void => {
+    if (this.control) {
+      // Cursor visibility is controlled via cursor sprite packets from control-plane.
+      return;
+    }
     if (document.pointerLockElement !== null) {
       this.send("p,1");
       console.log("remote pointer visibility to: True");
@@ -337,8 +452,10 @@ export class Input {
    */
   private exitPointerLock = (): void => {
     document.exitPointerLock();
-    this.send("p,0");
-    console.log("remote pointer visibility to: False");
+    if (!this.control) {
+      this.send("p,0");
+      console.log("remote pointer visibility to: False");
+    }
   };
 
   /**
@@ -396,58 +513,7 @@ export class Input {
     return serverY;
   }
 
-  /**
-   * Отправляет команду WebRTC приложению для подключения виртуального джойстика и инициализирует локальный GamepadManager
-   */
-  private gamepadConnected = (event: Event): void => {
-    const gamepadEvent = event as GamepadEvent;
-    console.log(`Gamepad connected at index ${gamepadEvent.gamepad.index}: ${gamepadEvent.gamepad.id}. ${gamepadEvent.gamepad.buttons.length} buttons, ${gamepadEvent.gamepad.axes.length} axes.`);
-
-    if (this.callbacks.ongamepadconnected) {
-      this.callbacks.ongamepadconnected(gamepadEvent.gamepad.id);
-    }
-
-    this.gamepadManager = new GamepadManager(
-      gamepadEvent.gamepad,
-      this.gamepadButton.bind(this),
-      this.gamepadAxis.bind(this)
-    );
-
-    this.send(`js,c,${gamepadEvent.gamepad.index},${btoa(gamepadEvent.gamepad.id)},${this.gamepadManager.numAxes},${this.gamepadManager.numButtons}`);
-  };
-
-  /**
-   * Отправляет команду отключения джойстика в WebRTC приложение
-   */
-  private gamepadDisconnect = (event: Event): void => {
-    const gamepadEvent = event as GamepadEvent;
-    console.log(`Gamepad ${gamepadEvent.gamepad.index} disconnected`);
-
-    if (this.callbacks.ongamepaddisconnected) {
-      this.callbacks.ongamepaddisconnected();
-    }
-
-    if (this.gamepadManager) {
-      this.gamepadManager.destroy();
-      this.gamepadManager = null;
-    }
-
-    this.send(`js,d,${gamepadEvent.gamepad.index}`);
-  };
-
-  /**
-   * Отправляет кнопку геймпада в WebRTC приложение
-   */
-  private gamepadButton(gp_num: number, btn_num: number, val: number): void {
-    this.send(`js,b,${gp_num},${btn_num},${val}`);
-  }
-
-  /**
-   * Отправляет ось геймпада в WebRTC приложение
-   */
-  private gamepadAxis(gp_num: number, axis_num: number, val: number): void {
-    this.send(`js,a,${gp_num},${axis_num},${val}`);
-  }
+  // Gamepad input is handled by Warplay control-plane (separate WebRTC connection).
 
   /**
    * Когда включается полноэкранный режим, запрашивает блокировку клавиатуры и указателя
@@ -510,10 +576,6 @@ export class Input {
     this.addListener(window, 'resize', this.windowMath);
     this.addListener(window, 'resize', this.resizeStart);
 
-    // Поддержка геймпада
-    this.addListener(window, 'gamepadconnected', this.gamepadConnected);
-    this.addListener(window, 'gamepaddisconnected', this.gamepadDisconnect);
-
     // Корректировка для scroll offset
     this.addListener(window, 'scroll', () => {
       if (this.m) {
@@ -536,23 +598,28 @@ export class Input {
       this.addListenerContext(this.element, 'touchend', this.touch);
       this.addListenerContext(this.element, 'touchmove', this.touch);
 
-      console.log("Enabling mouse pointer display for touch devices.");
-      this.send("p,1");
-      console.log("remote pointer visibility to: True");
+      if (!this.control) {
+        console.log("Enabling mouse pointer display for touch devices.");
+        this.send("p,1");
+        console.log("remote pointer visibility to: True");
+      }
     } else {
       this.addListenerContext(this.element, 'mousemove', this.mouseButtonMovement);
       this.addListenerContext(this.element, 'mousedown', this.mouseButtonMovement);
       this.addListenerContext(this.element, 'mouseup', this.mouseButtonMovement);
     }
 
-    // Используем Guacamole.Keyboard для правильной обработки клавиш-модификаторов
-    this.keyboard = new Guacamole.Keyboard(window);
-    this.keyboard.onkeydown = (keysym) => {
-      this.send("kd," + keysym);
-    };
-    this.keyboard.onkeyup = (keysym) => {
-      this.send("ku," + keysym);
-    };
+    // Используем Guacamole.Keyboard только для legacy Selkies управления.
+    // Для Warplay control-plane клавиши отправляются через this.key (vk_code).
+    if (!this.control) {
+      this.keyboard = new Guacamole.Keyboard(window);
+      this.keyboard.onkeydown = (keysym) => {
+        this.send("kd," + keysym);
+      };
+      this.keyboard.onkeyup = (keysym) => {
+        this.send("ku," + keysym);
+      };
+    }
 
     if (document.fullscreenElement !== null && document.pointerLockElement === null) {
       this.element.requestPointerLock().then(
@@ -680,5 +747,3 @@ export class Input {
     });
   }
 }
-
-
