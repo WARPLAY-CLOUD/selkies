@@ -12,6 +12,18 @@ CONTROL_SIGNALING_PORT="${SELKIES_CONTROL_SIGNALING_PORT:-8787}"
 CONTROL_PORT="${SELKIES_CONTROL_PORT:-8081}"
 CONTROL_BIND="${SELKIES_CONTROL_BIND:-0.0.0.0}"
 
+# Wait for X11 socket; control server needs X11 for cursor capture / input injection.
+export DISPLAY="${DISPLAY:-:20}"
+echo "[warplay-control] waiting for X socket for DISPLAY=${DISPLAY} ..."
+until [ -S "/tmp/.X11-unix/X${DISPLAY#*:}" ]; do
+  sleep 0.5
+done
+
+# Ensure /dev/uinput is accessible for the current user (uinput gamepad).
+if [ -e /dev/uinput ]; then
+  (sudo-root chmod 666 /dev/uinput 2>/dev/null || chmod 666 /dev/uinput 2>/dev/null || true)
+fi
+
 STUN_URL="${SELKIES_CONTROL_STUN_URL:-stun:${SELKIES_STUN_HOST:-${SELKIES_TURN_HOST:-stun.l.google.com}}:${SELKIES_STUN_PORT:-${SELKIES_TURN_PORT:-19302}}}"
 
 TURN_HOST="${SELKIES_TURN_HOST:-}"
@@ -46,4 +58,3 @@ fi
 
 echo "[warplay-control] starting: ${BIN} ${ARGS[*]}"
 exec "${BIN}" "${ARGS[@]}"
-
