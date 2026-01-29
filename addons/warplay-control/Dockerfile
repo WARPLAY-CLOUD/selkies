@@ -22,9 +22,11 @@ COPY warplay-srs-server/src ./warplay-srs-server/src
 WORKDIR /src/warplay-srs-server
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/src/warplay-srs-server/target \
-    cargo build --release
+    --mount=type=cache,target=/cargo-target \
+    set -e; \
+    CARGO_TARGET_DIR=/cargo-target cargo build --release --bin warplay-linux-control; \
+    cp -f /cargo-target/release/warplay-linux-control /opt/warplay-linux-control
 
 FROM debian:bookworm-slim
 WORKDIR /opt
-COPY --from=builder /src/warplay-srs-server/target/release/warplay-linux-control /opt/warplay-linux-control
+COPY --from=builder /opt/warplay-linux-control /opt/warplay-linux-control

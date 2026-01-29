@@ -13,8 +13,6 @@
 #   GSTREAMER_BUNDLE_SOURCE=cdn ./build.sh        # Скачать GStreamer bundle с CDN (кэш в dist/)
 #   GSTREAMER_BUNDLE_SOURCE=build ./build.sh      # Всегда собирать GStreamer локально (медленно)
 #   GSTREAMER_BUNDLE_SOURCE=auto ./build.sh       # (по умолчанию) взять локальный bundle -> CDN -> build
-#   BUILD_JS_INTERPOSER=false ./build.sh          # Пропустить JS Interposer
-#   BUILD_CONTROL=false ./build.sh                # Пропустить Warplay control server (Rust)
 #   SELKIES_VERSION=1.7.0 ./build.sh              # Задать свою версию
 #   DISTRIB_RELEASE=22.04 ./build.sh              # Для Ubuntu 22.04
 
@@ -32,7 +30,6 @@ NC='\033[0m'
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 VERSION="${SELKIES_VERSION:-1.6.2+w}"
 PYPI_PACKAGE="${PYPI_PACKAGE:-selkies_gstreamer}"
-PKG_NAME="${PKG_NAME:-selkies-js-interposer}"
 DISTRIB_IMAGE="${DISTRIB_IMAGE:-ubuntu}"
 DISTRIB_RELEASE="${DISTRIB_RELEASE:-24.04}"
 ARCH="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
@@ -40,8 +37,6 @@ ARCH="$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')"
 # Параметры сборки
 BUILD_PYTHON=${BUILD_PYTHON:-true}
 BUILD_WEB=${BUILD_WEB:-true}
-BUILD_JS_INTERPOSER=${BUILD_JS_INTERPOSER:-true}
-BUILD_CONTROL=${BUILD_CONTROL:-true}
 BUILD_GSTREAMER=${BUILD_GSTREAMER:-true}
 WEB_VARIANT=${WEB_VARIANT:-gst-web-react}  # gst-web-react (по умолчанию) или gst-web
 # Где брать GStreamer bundle:
@@ -99,8 +94,7 @@ echo ""
 echo -e "${BLUE}Что будет собрано:${NC}"
 echo "  [$([ "$BUILD_PYTHON" = "true" ] && echo "x" || echo " ")] Python wheel (обязательный)"
 echo "  [$([ "$BUILD_WEB" = "true" ] && echo "x" || echo " ")] Web интерфейс (обязательный) - ${WEB_VARIANT}"
-echo "  [$([ "$BUILD_JS_INTERPOSER" = "true" ] && echo "x" || echo " ")] JS Interposer (опционально, ~30 сек)"
-echo "  [$([ "$BUILD_CONTROL" = "true" ] && echo "x" || echo " ")] Warplay control server (опционально, Rust)"
+echo "  [x] Warplay control server (обязательный, Rust)"
 echo "  [$([ "$BUILD_GSTREAMER" = "true" ] && echo "x" || echo " ")] GStreamer bundle (опционально, ~45 мин, можно пропустить)"
 echo ""
 if [ "$BUILD_GSTREAMER" = "true" ]; then
@@ -115,7 +109,7 @@ mkdir -p "${REPO_ROOT}/dist"
 # 1. Python wheel - py-build образ
 # ========================================
 if [ "$BUILD_PYTHON" = "true" ]; then
-    echo -e "${GREEN}[1/5] Сборка Python wheel...${NC}"
+    echo -e "${GREEN}[1/4] Сборка Python wheel...${NC}"
     
     # Собрать Docker образ py-build
     docker build \
@@ -157,7 +151,7 @@ fi
 # 2. Web интерфейс - gst-web или gst-web-react
 # ========================================
 if [ "$BUILD_WEB" = "true" ]; then
-    echo -e "${GREEN}[2/5] Сборка Web интерфейса (${WEB_VARIANT})...${NC}"
+    echo -e "${GREEN}[2/4] Сборка Web интерфейса (${WEB_VARIANT})...${NC}"
     
     # Определяем Dockerfile и образ
     if [ "$WEB_VARIANT" = "gst-web-react" ]; then
@@ -245,64 +239,9 @@ EOF
 fi
 
 # ========================================
-# 3. JS Interposer (DEB пакет)
+# 3. Warplay control server (Rust) - warplay-linux-control (обязательный)
 # ========================================
-if [ "$BUILD_JS_INTERPOSER" = "true" ]; then
-    echo -e "${GREEN}[3/5] Сборка JS Interposer...${NC}"
-    
-    JS_BUILT=false
-    JS_EFFECTIVE_RELEASE=""
-    for REL in $(release_fallbacks); do
-        echo -e "${CYAN}  → Попытка сборки JS Interposer для Ubuntu ${REL}...${NC}"
-        if docker build \
-            --build-arg DISTRIB_IMAGE="${DISTRIB_IMAGE}" \
-            --build-arg DISTRIB_RELEASE="${REL}" \
-            --build-arg PKG_NAME="${PKG_NAME}" \
-            --build-arg PKG_VERSION="${VERSION}" \
-            --build-arg DEBFULLNAME="Build User" \
-            --build-arg DEBEMAIL="build@localhost" \
-            -t selkies-js-interposer-builder:latest \
-            -f "${REPO_ROOT}/addons/js-interposer/Dockerfile.debpkg" \
-            "${REPO_ROOT}/addons/js-interposer" 2>&1 | grep -E "(Step|Successfully|ERROR)" || true; then
-            :
-        fi
-
-        # Извлечь .deb из образа
-        echo -e "${CYAN}    → Извлечение .deb пакета...${NC}"
-        OUT_DEB="${REPO_ROOT}/dist/selkies-js-interposer_v${VERSION}_${DISTRIB_IMAGE}${REL}_${ARCH}.deb"
-        CONTAINER_ID=$(docker create selkies-js-interposer-builder:latest 2>/dev/null || true)
-        if [ -n "${CONTAINER_ID}" ]; then
-            docker cp "${CONTAINER_ID}:/opt/${PKG_NAME}_${VERSION}.deb" "${OUT_DEB}" 2>/dev/null || true
-            docker rm "${CONTAINER_ID}" >/dev/null 2>&1 || true
-        fi
-
-        if [ -f "${OUT_DEB}" ]; then
-            DEB_SIZE=$(stat -c%s "${OUT_DEB}" 2>/dev/null || stat -f%z "${OUT_DEB}" 2>/dev/null || echo 0)
-            if [ "${DEB_SIZE}" -ge 1000 ]; then
-                echo -e "${GREEN}  ✓ JS Interposer: $(basename "${OUT_DEB}")${NC}"
-                JS_BUILT=true
-                JS_EFFECTIVE_RELEASE="${REL}"
-                break
-            else
-                rm -f "${OUT_DEB}" || true
-            fi
-        fi
-    done
-
-    if [ "${JS_BUILT}" != "true" ]; then
-        echo -e "${YELLOW}  ⚠ JS Interposer не собран (опциональный компонент)${NC}"
-    fi
-    echo ""
-else
-    echo -e "${BLUE}[3/5] JS Interposer пропущен (отключен)${NC}"
-    echo ""
-fi
-
-# ========================================
-# 4. Warplay control server (Rust) - warplay-linux-control
-# ========================================
-if [ "$BUILD_CONTROL" = "true" ]; then
-    echo -e "${GREEN}[4/5] Сборка Warplay control server (warplay-linux-control)...${NC}"
+echo -e "${GREEN}[3/4] Сборка Warplay control server (warplay-linux-control)...${NC}"
 
     CONTROL_IMAGE="warplay-control-build:latest"
     CONTROL_BIN_NAME="warplay-linux-control"
@@ -349,13 +288,10 @@ if [ "$BUILD_CONTROL" = "true" ]; then
     echo -e "${GREEN}  ✓ Overlay: dist/copy_to_docker/usr/local/bin/${CONTROL_BIN_NAME}${NC}"
     echo -e "${GREEN}  ✓ Tarball: dist/${CONTROL_BIN_NAME}_v${VERSION}_${ARCH}.tar.gz${NC}"
     echo ""
-else
-    echo -e "${BLUE}[4/5] Warplay control server пропущен (отключен)${NC}"
-    echo ""
-fi
+echo ""
 
 # ========================================
-# 5. GStreamer bundle (долгая сборка!)
+# 4. GStreamer bundle (долгая сборка!)
 # ========================================
 SELKIES_CDN_BASE_URL=${SELKIES_CDN_BASE_URL:-"https://cdn.warplay.cloud/drivers/linux/system/selkies/releases/download/v${VERSION}"}
 
@@ -400,7 +336,7 @@ select_gstreamer_release || true
 # 4a) Reuse local bundle / download from CDN (cache in dist/) before attempting a long local build.
 if [ "${GSTREAMER_BUNDLE_SOURCE}" != "build" ]; then
     if select_gstreamer_release; then
-        echo -e "${BLUE}[5/5] GStreamer bundle уже есть в dist/ (Ubuntu ${GSTREAMER_EFFECTIVE_RELEASE}), пропускаем сборку${NC}"
+        echo -e "${BLUE}[4/4] GStreamer bundle уже есть в dist/ (Ubuntu ${GSTREAMER_EFFECTIVE_RELEASE}), пропускаем сборку${NC}"
         BUILD_GSTREAMER=false
     fi
 
@@ -418,7 +354,7 @@ if [ "${GSTREAMER_BUNDLE_SOURCE}" != "build" ]; then
                     GSTREAMER_TARBALL_NAME="gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${REL}_${ARCH}.tar.gz"
                     GSTREAMER_TARBALL="${REPO_ROOT}/dist/${GSTREAMER_TARBALL_NAME}"
                     GSTREAMER_CDN_URL="${SELKIES_CDN_BASE_URL}/${GSTREAMER_TARBALL_NAME}"
-                    echo -e "${BLUE}[5/5] Найден локальный GStreamer bundle (Ubuntu ${REL}): ${CAND}${NC}"
+                    echo -e "${BLUE}[4/4] Найден локальный GStreamer bundle (Ubuntu ${REL}): ${CAND}${NC}"
                     mkdir -p "${REPO_ROOT}/dist"
                     cp -f "${CAND}" "${GSTREAMER_TARBALL}" || true
                     if validate_gstreamer_bundle "${GSTREAMER_TARBALL}"; then
@@ -434,7 +370,7 @@ if [ "${GSTREAMER_BUNDLE_SOURCE}" != "build" ]; then
     fi
 
     if [ "$BUILD_GSTREAMER" = "true" ]; then
-        echo -e "${CYAN}[5/5] GStreamer bundle не найден, пробуем скачать с CDN...${NC}"
+        echo -e "${CYAN}[4/4] GStreamer bundle не найден, пробуем скачать с CDN...${NC}"
         for REL in $(release_fallbacks); do
             GSTREAMER_EFFECTIVE_RELEASE="${REL}"
             GSTREAMER_TARBALL_NAME="gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${REL}_${ARCH}.tar.gz"
@@ -463,7 +399,7 @@ if [ "${GSTREAMER_BUNDLE_SOURCE}" != "build" ]; then
 fi
 
 if [ "$BUILD_GSTREAMER" = "true" ] && [ "${GSTREAMER_BUNDLE_SOURCE}" != "cdn" ]; then
-    echo -e "${GREEN}[5/5] Сборка GStreamer bundle...${NC}"
+    echo -e "${GREEN}[4/4] Сборка GStreamer bundle...${NC}"
     echo -e "${YELLOW}  ⚠ ВНИМАНИЕ: Это займет 30-60 минут!${NC}"
     echo -e "${YELLOW}  ⚠ Нажмите Ctrl+C в течение 10 секунд, чтобы пропустить...${NC}"
     
@@ -582,13 +518,6 @@ if [ -f "${REPO_ROOT}/dist/selkies-gstreamer-web_v${VERSION}.tar.gz" ]; then
     REQUIRED_COUNT=$((REQUIRED_COUNT + 1))
 fi
 
-# JS Interposer
-if [ -f "${REPO_ROOT}/dist/selkies-js-interposer_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.deb" ]; then
-    SIZE=$(du -h "${REPO_ROOT}/dist/selkies-js-interposer_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.deb" | cut -f1)
-    echo -e "  ${GREEN}✓${NC} selkies-js-interposer_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.deb (${SIZE})"
-    ARTIFACT_COUNT=$((ARTIFACT_COUNT + 1))
-fi
-
 # GStreamer
 if [ -f "${REPO_ROOT}/dist/gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.tar.gz" ]; then
     SIZE=$(du -h "${REPO_ROOT}/dist/gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.tar.gz" | cut -f1)
@@ -611,13 +540,8 @@ if [ ${REQUIRED_COUNT} -eq 2 ]; then
     echo "  2. Развернуть web интерфейс:"
     echo "     sudo tar -xzf dist/selkies-gstreamer-web_v${VERSION}.tar.gz -C /opt"
     echo ""
-    if [ -f "${REPO_ROOT}/dist/selkies-js-interposer_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.deb" ]; then
-        echo "  3. Установить JS Interposer (опционально):"
-        echo "     sudo dpkg -i dist/selkies-js-interposer_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.deb"
-        echo ""
-    fi
     if [ -f "${REPO_ROOT}/dist/gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.tar.gz" ]; then
-        echo "  4. Установить GStreamer bundle:"
+        echo "  3. Установить GStreamer bundle:"
         echo "     sudo tar -xzf dist/gstreamer-selkies_gpl_v${VERSION}_${DISTRIB_IMAGE}${DISTRIB_RELEASE}_${ARCH}.tar.gz -C /opt"
         echo "     . /opt/gstreamer/gst-env"
         echo ""

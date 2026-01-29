@@ -18,10 +18,9 @@ chmod +x build.sh
 1. **Python wheel** (`selkies_gstreamer-*.whl`) - основной код приложения
 2. **Web интерфейс** (`gst-web_*.tar.gz`) - HTML5 клиент
 
-### Опциональные компоненты (по умолчанию включены):
-3. **JS Interposer** (`selkies-js-interposer_*.deb`) - оптимизация джойстиков (~30 секунд сборки)
-4. **Warplay control server** (`warplay-linux-control` + overlay) - отдельный процесс управления (Rust)
-5. **GStreamer bundle** (`gstreamer-selkies_*.tar.gz`) - кастомная сборка GStreamer (~45 минут!)
+### Опциональные компоненты:
+3. **Warplay control server** (`warplay-linux-control` + overlay) - отдельный процесс управления (Rust)
+4. **GStreamer bundle** (`gstreamer-selkies_*.tar.gz`) - кастомная сборка GStreamer (~45 минут!)
 
 ## Управление сборкой
 
@@ -39,17 +38,12 @@ chmod +x build.sh
 ### Отключить компоненты через переменные окружения
 
 ```bash
-# Собрать только минимум (Python + Web)
-BUILD_JS_INTERPOSER=false BUILD_CONTROL=false BUILD_GSTREAMER=false ./build.sh
-
-# Собрать без GStreamer (но с JS Interposer)
+# Собрать только минимум (Python + Web) — без GStreamer bundle
 BUILD_GSTREAMER=false ./build.sh
 
-# Собрать без control server
-BUILD_CONTROL=false ./build.sh
+# Собрать без GStreamer
+BUILD_GSTREAMER=false ./build.sh
 
-# Собрать без JS Interposer
-BUILD_JS_INTERPOSER=false ./build.sh
 ```
 
 ### Изменить версию или дистрибутив
@@ -73,7 +67,6 @@ DISTRIB_IMAGE=debian DISTRIB_RELEASE=12 ./build.sh
 dist/
 ├── selkies_gstreamer-1.6.2+w-py3-none-any.whl            # Python пакет
 ├── gst-web_v1.6.2+w.tar.gz                               # Web интерфейс
-├── selkies-js-interposer_1.6.2+w_ubuntu24.04_amd64.deb  # JS Interposer (опц.)
 ├── warplay-linux-control                                 # Control server (опц.)
 ├── warplay-linux-control_v1.6.2+w_amd64.tar.gz           # Control server tarball (опц.)
 └── copy_to_docker/usr/local/bin/warplay-linux-control     # Overlay для docker-selkies-* (опц.)
@@ -91,7 +84,6 @@ dist/
 
 - Python wheel: ~30 секунд
 - Web интерфейс: ~15 секунд
-- JS Interposer: ~30 секунд
 - GStreamer bundle: **30-60 минут** (можно пропустить)
 
 **Итого без GStreamer:** ~1-2 минуты  
@@ -123,10 +115,7 @@ pip3 install dist/selkies_gstreamer-*.whl
 sudo mkdir -p /opt/gst-web
 sudo tar -xzf dist/gst-web_*.tar.gz -C /opt --strip-components=1
 
-# 3. (Опционально) Установить JS Interposer
-sudo dpkg -i dist/selkies-js-interposer_*.deb
-
-# 4. (Опционально) Установить GStreamer bundle
+# 3. (Опционально) Установить GStreamer bundle
 sudo tar -xzf dist/gstreamer-selkies_*.tar.gz -C /opt
 . /opt/gstreamer/gst-env
 ```

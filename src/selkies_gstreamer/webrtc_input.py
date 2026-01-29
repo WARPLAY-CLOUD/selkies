@@ -33,7 +33,6 @@ import subprocess
 import socket
 import time
 from PIL import Image
-from gamepad import SelkiesGamepad
 
 import logging
 logger = logging.getLogger("webrtc_input")
@@ -80,7 +79,7 @@ class WebRTCInputError(Exception):
 
 
 class WebRTCInput:
-    def __init__(self, uinput_mouse_socket_path="", js_socket_path="", enable_clipboard="", enable_cursors=True, cursor_size=16, cursor_scale=1.0, cursor_debug=False, enable_uinput_gamepad=False, uinput_device="/dev/uinput", enable_input=False):
+    def __init__(self, uinput_mouse_socket_path="", enable_clipboard="", enable_cursors=True, cursor_size=16, cursor_scale=1.0, cursor_debug=False, enable_input=False):
         """Initializes WebRTC input instance
         """
 
@@ -90,14 +89,6 @@ class WebRTCInput:
         self.clipboard_running = False
         self.uinput_mouse_socket_path = uinput_mouse_socket_path
         self.uinput_mouse_socket = None
-        self.enable_uinput_gamepad = enable_uinput_gamepad
-        self.uinput_device = uinput_device
-
-        # Map of gamepad numbers to socket paths
-        self.js_socket_path_map = {i: os.path.join(js_socket_path, "selkies_js%d.sock" % i) for i in range(4)}
-
-        # Map of gamepad number to SelkiesGamepad objects
-        self.js_map = {}
 
         self.enable_clipboard = enable_clipboard
 
@@ -168,66 +159,6 @@ class WebRTCInput:
             self.uinput_mouse_socket.sendto(
                 data, self.uinput_mouse_socket_path)
 
-    def __js_connect(self, js_num, name, num_btns, num_axes):
-        """Connect virtual joystick using Selkies Joystick Interposer
-        """
-
-        logger.info("creating selkies gamepad for js%d, name: '%s', buttons: %d, axes: %d" % (js_num, name, num_btns, num_axes))
-
-        socket_path = self.js_socket_path_map.get(js_num, None)
-        if socket_path is None:
-            logger.error("failed to connect js%d because socket_path was not found" % js_num)
-            return
-
-        # Create gamepad server if it doesn't exist
-        js = self.js_map.get(js_num, None)
-        if js is None:
-            js = SelkiesGamepad(socket_path, self.enable_uinput_gamepad, self.uinput_device)
-            asyncio.create_task(js.run_server())
-            self.js_map[js_num] = js
-        
-        # Set config (this will send config to any connected clients)
-        js.set_config(name, num_btns, num_axes)
-
-    async def __js_disconnect(self, js_num=None):
-        if js_num is None:
-            # stop all gamepads.
-            for js in self.js_map.values():
-                await asyncio.to_thread(js.stop_server)
-            self.js_map = {}
-            return
-        
-        js = await asyncio.to_thread(self.js_map.get, js_num, None)
-        if js is not None:
-            logger.info("stopping gamepad %d" % js_num)
-            await asyncio.to_thread(js.stop_server)
-            del self.js_map[js_num]
-
-    def __js_emit_btn(self, js_num, btn_num, btn_val):
-        js = self.js_map.get(js_num, None)
-        if js is None:
-            logger.error("cannot send button because js%d is not connected" % js_num)
-            return
-
-        logger.debug("sending js%d button num %d with val %d" % (js_num, btn_num, btn_val))
-
-        js.send_btn(btn_num, btn_val)
-
-    def __js_emit_axis(self, js_num, axis_num, axis_val):
-        js = self.js_map.get(js_num, None)
-        if js is None:
-            logger.error("cannot send axis because js%d is not connected" % js_num)
-            return
-
-        logger.debug("sending js%d axis num %d with val %d (range: 0-255)" % (js_num, axis_num, axis_val))
-        
-        # Validate input range
-        if axis_val < 0 or axis_val > 255:
-            logger.warning("Axis value %d out of expected range [0, 255] for js%d axis %d" % 
-                          (axis_val, js_num, axis_num))
-
-        js.send_axis(axis_num, axis_val)
-
     async def connect(self):
         # Create connection to the X11 server provided by the DISPLAY env var.
         self.xdisplay = display.Display()
@@ -241,7 +172,6 @@ class WebRTCInput:
             self.__mouse_connect()
 
     async def disconnect(self):
-        await self.__js_disconnect()
         self.__mouse_disconnect()
 
     def reset_keyboard(self):
@@ -565,9 +495,6 @@ class WebRTCInput:
                     debugf.write(data)
             return data
 
-    async def stop_js_server(self):
-        await self.__js_disconnect()
-
     async def on_message(self, msg):
         """Handles incoming input messages
 
@@ -580,7 +507,6 @@ class WebRTCInput:
           ku: key up event, data is keysym
           m: mouse event, data is csv of: x,y,button mask
           b: bitrate event, data is the desired encoder bitrate in bps.
-          js: joystick connect/disconnect/button/axis event
 
         Arguments:
             msg {string} -- the raw data channel message packed in the <command>,<data> format.
@@ -643,33 +569,6 @@ class WebRTCInput:
             bitrate = int(toks[1])
             logger.info("Setting audio bitrate to: %d" % bitrate)
             self.on_audio_encoder_bit_rate(bitrate)
-        elif toks[0] == "js":
-            # Joystick
-            # button: b,<btn_num>,<value>
-            # axis: a,<axis_num>,<value>
-            if not self.enable_input:
-                return
-            if toks[1] == 'c':
-                js_num = int(toks[2])
-                name = base64.b64decode(toks[3]).decode()[:255]
-                num_axes = int(toks[4])
-                num_btns = int(toks[5])
-                self.__js_connect(js_num, name, num_btns, num_axes)
-            elif toks[1] == 'd':
-                js_num = int(toks[2])
-                await self.__js_disconnect(js_num)
-            elif toks[1] == 'b':
-                js_num = int(toks[2])
-                btn_num = int(toks[3])
-                btn_val = float(toks[4])
-                self.__js_emit_btn(js_num, btn_num, btn_val)
-            elif toks[1] == 'a':
-                js_num = int(toks[2])
-                axis_num = int(toks[3])
-                axis_val = float(toks[4])
-                self.__js_emit_axis(js_num, axis_num, axis_val)
-            else:
-                logger.warning('unhandled joystick command: %s' % toks[1])
         elif toks[0] == "cr":
             # Clipboard read
             if self.enable_clipboard in ["true", "out"]:

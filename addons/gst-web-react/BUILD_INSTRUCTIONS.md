@@ -37,8 +37,7 @@ WEB_VARIANT=gst-web-react ./build.sh
 
 1. ✅ **Python wheel** - обязательный компонент
 2. ✅ **Web интерфейс** - gst-web-react или gst-web (на выбор)
-3. ⚙️ **JS Interposer** - опционально (~30 сек)
-4. 🎬 **GStreamer bundle** - опционально (~45 мин, можно пропустить)
+3. 🎬 **GStreamer bundle** - опционально (~45 мин, можно пропустить)
 
 ## 🎯 Примеры использования
 
@@ -51,7 +50,6 @@ WEB_VARIANT=gst-web-react ./build.sh
 **Результат:**
 - `dist/selkies_gstreamer-1.6.2+w-py3-none-any.whl`
 - `dist/selkies-gstreamer-web_v1.6.2+w.tar.gz` (содержит gst-web-react)
-- `dist/selkies-js-interposer_v1.6.2+w_ubuntu24.04_amd64.deb`
 
 ### 2. Собрать с оригинальным gst-web
 
@@ -62,18 +60,17 @@ WEB_VARIANT=gst-web ./build.sh
 **Результат:**
 - `dist/selkies_gstreamer-1.6.2+w-py3-none-any.whl`
 - `dist/selkies-gstreamer-web_v1.6.2+w.tar.gz` (содержит gst-web)
-- `dist/selkies-js-interposer_v1.6.2+w_ubuntu24.04_amd64.deb`
 
 ### 3. Собрать только web интерфейс (gst-web-react)
 
 ```bash
-BUILD_PYTHON=false BUILD_JS_INTERPOSER=false BUILD_GSTREAMER=false ./build.sh
+BUILD_PYTHON=false BUILD_GSTREAMER=false ./build.sh
 ```
 
 ### 4. Собрать только web интерфейс (gst-web)
 
 ```bash
-WEB_VARIANT=gst-web BUILD_PYTHON=false BUILD_JS_INTERPOSER=false BUILD_GSTREAMER=false ./build.sh
+WEB_VARIANT=gst-web BUILD_PYTHON=false BUILD_GSTREAMER=false ./build.sh
 ```
 
 ### 5. Пропустить GStreamer (долгая сборка)
@@ -95,7 +92,6 @@ SELKIES_VERSION=1.7.0 WEB_VARIANT=gst-web-react ./build.sh
 | `WEB_VARIANT` | `gst-web-react`, `gst-web` | `gst-web-react` | Вариант web интерфейса |
 | `BUILD_PYTHON` | `true`, `false` | `true` | Собрать Python wheel |
 | `BUILD_WEB` | `true`, `false` | `true` | Собрать web интерфейс |
-| `BUILD_JS_INTERPOSER` | `true`, `false` | `true` | Собрать JS Interposer |
 | `BUILD_GSTREAMER` | `true`, `false` | `true` | Собрать GStreamer bundle |
 | `SELKIES_VERSION` | любая строка | `1.6.2+w` | Версия пакета |
 | `DISTRIB_RELEASE` | `22.04`, `24.04` и др. | `24.04` | Ubuntu версия |
@@ -113,7 +109,6 @@ dist/
 │       └── assets/
 │           ├── index-*.js
 │           └── index-*.css
-├── selkies-js-interposer_v1.6.2+w_ubuntu24.04_amd64.deb
 └── gstreamer-selkies_gpl_v1.6.2+w_ubuntu24.04_amd64.tar.gz (если собран)
 ```
 
@@ -283,4 +278,3 @@ tar -tzf dist/selkies-gstreamer-web_v*.tar.gz | grep -E "(index.html|.js|.css)" 
 ---
 
 **Готово!** Теперь вы можете выбирать вариант web интерфейса при каждой сборке. 🎉
-

@@ -151,68 +151,6 @@ Otherwise (for different operating system distributions or system architectures)
 
 These components are not required for Selkies-GStreamer, but may be required in specific cases of deployments or preferences. These sections are recommended to be nonetheless, read carefully.
 
-#### Joystick Interposer
-
-The [Joystick Interposer](https://github.com/selkies-project/selkies-gstreamer/tree/main/addons/js-interposer) is a special library that allows the usage of joysticks or gamepads inside unprivileged containers (most of the occasions with shared Kubernetes clusters or HPC clusters), where host kernel devices required for creating a joystick interface are not available. It uses a `LD_PRELOAD` hack to intercept `uinput` input commands from joysticks or gamepads into Selkies-GStreamer (much like how [VirtualGL](https://github.com/VirtualGL/virtualgl) intercepts OpenGL commands).
-
-Pre-built `x86_64` and `aarch64` joystick interposer components for Ubuntu are available with the name (fill in the OS version `DISTRIB_RELEASE` such as `24.04`, `22.04`, Ubuntu-style architecture `ARCH` such as `amd64` and `arm64`) **`selkies-js-interposer_v${SELKIES_VERSION}_ubuntu${DISTRIB_RELEASE}_${ARCH}.tar.gz`** or **`selkies-js-interposer_v${SELKIES_VERSION}_ubuntu${DISTRIB_RELEASE}_${ARCH}.deb`** for download in the [Releases](https://github.com/selkies-project/selkies-gstreamer/releases) for the latest stable version.
-
-**Instructions from [Advanced Install](start.md#advanced-install) still apply below.**
-
-For the most recent unreleased commit, download from the [GitHub Actions Workflow Runs](https://github.com/selkies-project/selkies-gstreamer/actions) `Build & publish all images` **`js-interposer-ubuntu${DISTRIB_RELEASE}-tar.gz_linux-${ARCH}`** or **`js-interposer-ubuntu${DISTRIB_RELEASE}-deb_linux-${ARCH}`** Build Artifact (under `Artifacts (Produced during runtime)`) for each commit from the `main` branch.
-
-Alternatively, copy and install the pre-built Joystick Interposer build (change `--platform=` to `linux/arm64` for `aarch64`, and change `main` with `latest` and `0.0.0` to the release version for the latest stable release):
-
-```bash
-docker create --platform="linux/amd64" --name js-interposer ghcr.io/selkies-project/selkies-gstreamer/js-interposer:main-ubuntu${DISTRIB_RELEASE}
-docker cp js-interposer:/opt/selkies-js-interposer_0.0.0.deb /tmp/selkies-js-interposer.deb
-docker rm js-interposer
-sudo apt-get update && sudo apt-get install --no-install-recommends --allow-downgrades -y /tmp/selkies-js-interposer.deb
-rm -f /tmp/selkies-js-interposer.deb
-```
-
-To retrieve the `.tar.gz` tarball instead of the `.deb` installer:
-
-```bash
-docker create --platform="linux/amd64" --name js-interposer ghcr.io/selkies-project/selkies-gstreamer/js-interposer:main-ubuntu${DISTRIB_RELEASE}
-docker cp js-interposer:/opt/selkies-js-interposer_0.0.0.tar.gz /tmp/selkies-js-interposer_0.0.0.tar.gz
-docker rm js-interposer
-```
-
-After extracting the `.tar.gz` tarball, move the `.so` library files to the library path (such as `/usr/lib/x86_64-linux-gnu` and `/usr/lib/i386-linux-gnu`) of your Linux distribution.
-
-The following paths are required to exist for the Joystick Interposer to pass the joystick/gamepad input to various applications:
-
-```bash
-sudo mkdir -pm1777 /dev/input
-sudo touch /dev/input/js0 /dev/input/js1 /dev/input/js2 /dev/input/js3
-sudo chmod 777 /dev/input/js*
-```
-
-The following environment variables are required to be set in the environment each application is being run in to receive the joystick/gamepad input.
-
-```bash
-export SELKIES_INTERPOSER='/usr/$LIB/selkies_joystick_interposer.so'
-export LD_PRELOAD="${SELKIES_INTERPOSER}${LD_PRELOAD:+:${LD_PRELOAD}}"
-export SDL_JOYSTICK_DEVICE=/dev/input/js0
-```
-
-You can replace `/usr/$LIB/selkies_joystick_interposer.so` with any non-root path of your choice if using the `.tar.gz` tarball.
-
-Check the [Joystick Interposer README.md](https://github.com/selkies-project/selkies-gstreamer/tree/main/addons/js-interposer/README.md) documentation for usage instruction and compiling information on other platforms.
-
-Check the following links for explanations of similar, but different attempts, for reference:
-
-<https://github.com/Steam-Headless/dumb-udev>
-
-<https://github.com/games-on-whales/inputtino>
-
-<https://github.com/games-on-whales/inputtino/tree/stable/src/uhid>
-
-<https://games-on-whales.github.io/wolf/stable/dev/fake-udev.html>
-
-<https://github.com/games-on-whales/wolf/tree/stable/src/fake-udev>
-
 #### Example Container
 
 The [Example Container](https://github.com/selkies-project/selkies-gstreamer/tree/main/addons/example) is the reference minimal-functionality container developers can base upon, or test Selkies-GStreamer quickly. The bare minimum Xfce4 desktop environment is installed together with Firefox, as well as an embedded TURN server inside the container for quick WebRTC firewall traversal.
