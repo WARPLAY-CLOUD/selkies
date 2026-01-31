@@ -60,7 +60,7 @@ export class WarplayControl {
   private connected = false;
   private gamepadTimer: number | null = null;
   private activeGamepadIndex: number | null = null;
-  private lastGamepadPacketHex: string | null = null;
+  private lastGamepadPacket: Uint8Array | null = null;
 
   constructor(cfg: WarplayControlConfig) {
     this.cfg = cfg;
@@ -108,7 +108,7 @@ export class WarplayControl {
   disconnect(): void {
     this.stopGamepadPolling();
     this.connected = false;
-    this.lastGamepadPacketHex = null;
+    this.lastGamepadPacket = null;
     this.activeGamepadIndex = null;
 
     try {
@@ -284,40 +284,46 @@ export class WarplayControl {
       window.cancelAnimationFrame(this.gamepadTimer);
       this.gamepadTimer = null;
     }
+    this.lastGamepadPacket = null;
+    this.activeGamepadIndex = null;
   }
 
   private pollGamepadOnce(): void {
+    if (!this.gamepadDc || this.gamepadDc.readyState !== 'open') return;
+
     const pads = navigator.getGamepads ? navigator.getGamepads() : [];
     if (!pads) return;
 
     let gp: Gamepad | null = null;
-    if (this.activeGamepadIndex !== null && pads[this.activeGamepadIndex]) {
-      gp = pads[this.activeGamepadIndex]!;
-    } else {
-      for (let i = 0; i < pads.length; i++) {
-        if (pads[i]) {
-          this.activeGamepadIndex = i;
-          gp = pads[i]!;
-          this.callbacks.ongamepadconnected?.(gp.id);
-          break;
-        }
+    for (const p of pads) {
+      if (p && p.connected) {
+        gp = p;
+        break;
       }
     }
+    if (!gp) return;
 
-    if (!gp) {
-      if (this.activeGamepadIndex !== null) {
-        this.activeGamepadIndex = null;
-        this.callbacks.ongamepaddisconnected?.();
-      }
-      return;
+    if (this.activeGamepadIndex === null) {
+      this.activeGamepadIndex = gp.index;
+      this.callbacks.ongamepadconnected?.(gp.id);
+    } else if (this.activeGamepadIndex !== gp.index) {
+      this.activeGamepadIndex = gp.index;
     }
 
     const pkt = this.encodeGamepadPacket(gp);
-    const hex = this.hexPreview(pkt, 64);
-    if (hex !== this.lastGamepadPacketHex) {
-      this.lastGamepadPacketHex = hex;
-      this.sendGamepadPacket(pkt);
+    if (this.lastGamepadPacket && this.arraysEqual(pkt, this.lastGamepadPacket)) {
+      return;
     }
+    this.lastGamepadPacket = pkt;
+    this.sendGamepadPacket(pkt);
+  }
+
+  private arraysEqual(a: Uint8Array, b: Uint8Array): boolean {
+    if (a.byteLength !== b.byteLength) return false;
+    for (let i = 0; i < a.byteLength; i++) {
+      if (a[i] !== b[i]) return false;
+    }
+    return true;
   }
 
   private encodeGamepadPacket(gp: Gamepad): Uint8Array {
@@ -326,46 +332,69 @@ export class WarplayControl {
     view.setUint8(0, 0x08); // Gamepad
     view.setUint8(1, 0); // pad_index reserved
 
-    // Standard mapping (Xbox-like):
-    // buttons: 0 A,1 B,2 X,3 Y,4 LB,5 RB,8 Back,9 Start,10 LS,11 RS,16 Guide
+    const buttons = gp.buttons || [];
+    const axes = gp.axes || [];
+
+    const pressed = (i: number) => !!(buttons[i] && buttons[i].pressed);
+    const buttonValue01 = (i: number) => Math.max(0, Math.min(1, (buttons[i] && typeof buttons[i].value === 'number') ? buttons[i].value : (pressed(i) ? 1 : 0)));
+    const axisValue01 = (axisIdx: number) => {
+      const v = (typeof axes[axisIdx] === 'number') ? axes[axisIdx] : 1;
+      // Firefox + Xbox Series S|X: neutral=1, pressed=-1
+      return Math.max(0, Math.min(1, (1 - v) / 2));
+    };
+
+    // Buttons mask (Xbox-like via standard mapping indices)
+    // 0:A(0) 1:B(1) 2:X(2) 3:Y(3) 4:LB(4) 5:RB(5) 6:Back(8) 7:Start(9) 8:LS(10) 9:RS(11) 10:Guide(16)
     let mask = 0;
-    const pressed = (idx: number) => (gp.buttons[idx]?.pressed ? 1 : 0);
-    mask |= pressed(0) << 0;
-    mask |= pressed(1) << 1;
-    mask |= pressed(2) << 2;
-    mask |= pressed(3) << 3;
-    mask |= pressed(4) << 4;
-    mask |= pressed(5) << 5;
-    mask |= pressed(8) << 6;
-    mask |= pressed(9) << 7;
-    mask |= pressed(10) << 8;
-    mask |= pressed(11) << 9;
-    mask |= pressed(16) << 10;
+    if (pressed(0)) mask |= (1 << 0);
+    if (pressed(1)) mask |= (1 << 1);
+    if (pressed(2)) mask |= (1 << 2);
+    if (pressed(3)) mask |= (1 << 3);
+    if (pressed(4)) mask |= (1 << 4);
+    if (pressed(5)) mask |= (1 << 5);
+    if (pressed(8)) mask |= (1 << 6);
+    if (pressed(9)) mask |= (1 << 7);
+    if (pressed(10)) mask |= (1 << 8);
+    if (pressed(11)) mask |= (1 << 9);
+    if (pressed(16)) mask |= (1 << 10);
     view.setUint16(2, mask & 0xffff, true);
 
-    const axis = (idx: number) => {
-      const v = gp.axes[idx] ?? 0;
-      const clamped = Math.max(-1, Math.min(1, v));
-      return clampI16(Math.round(clamped * 32767));
+    const f2i16 = (v: number | undefined) => {
+      const x = Math.max(-1, Math.min(1, (typeof v === 'number') ? v : 0));
+      return clampI16(Math.round(x * 32767));
     };
-    view.setInt16(4, axis(0), true); // lx
-    view.setInt16(6, axis(1), true); // ly
-    view.setInt16(8, axis(2), true); // rx
-    view.setInt16(10, axis(3), true); // ry
+    view.setInt16(4, f2i16(axes[0]), true); // lx
+    view.setInt16(6, f2i16(axes[1]), true); // ly
+    view.setInt16(8, f2i16(axes[2]), true); // rx
+    view.setInt16(10, f2i16(axes[3]), true); // ry
 
-    const trigger = (idx: number) => clampU8(Math.round((gp.buttons[idx]?.value ?? 0) * 255));
-    view.setUint8(12, trigger(6)); // lt
-    view.setUint8(13, trigger(7)); // rt
+    // Triggers:
+    // - Chromium (mapping='standard'): LT/RT are in buttons[6]/buttons[7].value (0..1)
+    // - Firefox + Xbox Series S|X: LT/RT are in axes[5]/axes[4] in [-1..1] (neutral=1, pressed=-1)
+    let lt01 = 0;
+    let rt01 = 0;
+    if (gp && gp.mapping === 'standard') {
+      lt01 = buttonValue01(6);
+      rt01 = buttonValue01(7);
+    } else {
+      lt01 = axisValue01(5);
+      rt01 = axisValue01(4);
+    }
+    view.setUint8(12, clampU8(Math.round(lt01 * 255)));
+    view.setUint8(13, clampU8(Math.round(rt01 * 255)));
 
-    const dpad = (idx: number) => (gp.buttons[idx]?.pressed ? 1 : 0);
-    const hatX = dpad(15) - dpad(14); // right - left
-    const hatY = dpad(13) - dpad(12); // down - up
+    // DPad via buttons 12..15 => hat (-1,0,1)
+    let hatX = 0;
+    let hatY = 0;
+    if (pressed(14)) hatX -= 1; // left
+    if (pressed(15)) hatX += 1; // right
+    if (pressed(12)) hatY -= 1; // up
+    if (pressed(13)) hatY += 1; // down
     view.setInt8(14, hatX);
     view.setInt8(15, hatY);
     // 16..23 reserved = 0
     return new Uint8Array(buf);
   }
-
   // ---------------- Cursor sprite (0x07) ----------------
   private onCursor(ev: MessageEvent): void {
     const data = ev.data;

@@ -7,6 +7,8 @@ export interface ConnectionConfig {
   host: string;
   /** Порт сервера (по умолчанию 8080) */
   port?: number;
+  /** Порт control-plane (warplay control). Если не задан, используется port. */
+  controlPort?: number;
   /** Использовать HTTPS/WSS (по умолчанию false) */
   secure?: boolean;
   /** Путь к приложению (по умолчанию "webrtc") */
@@ -76,6 +78,7 @@ export function getConnectionConfig(config?: AppConfig): ConnectionConfig {
   const controlEnabledParam = urlParams.get('control');
   const controlWsParam = urlParams.get('control_ws');
   const controlPathParam = urlParams.get('control_path');
+  const controlPortParam = urlParams.get('control-port');
 
   // TURN параметры из URL
   const turnHost = urlParams.get('turn_host');
@@ -119,6 +122,13 @@ export function getConnectionConfig(config?: AppConfig): ConnectionConfig {
     appName,
     basePath: '/',
   };
+
+  if (controlPortParam) {
+    const cp = parseInt(controlPortParam);
+    if (!Number.isNaN(cp)) {
+      connectionConfig.controlPort = cp;
+    }
+  }
 
   // control-plane websocket (warplay control server)
   if (controlWsParam) {
@@ -165,7 +175,8 @@ export function createControlSignallingUrl(config: ConnectionConfig): string {
     return config.controlSignallingUrl;
   }
   const protocol = config.secure ? 'wss' : 'ws';
-  const port = config.port ? `:${config.port}` : '';
+  const controlPort = (config.controlPort ?? config.port);
+  const port = controlPort ? `:${controlPort}` : '';
   const basePath = config.basePath || '/';
   const path = (config.controlSignallingPath || '/control/ws').replace(/^\//, '');
   return `${protocol}://${config.host}${port}${basePath}${path}`;

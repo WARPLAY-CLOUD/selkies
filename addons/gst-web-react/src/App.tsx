@@ -734,6 +734,11 @@ const App: React.FC<AppProps> = ({ connectionConfig, appConfig }) => {
           }
           if (override) {
             video.style.cursor = override;
+            if (override === 'none' && document.pointerLockElement !== video) {
+              try {
+                video.requestPointerLock();
+              } catch { }
+            }
             return;
           }
           if (!webrtc.cursor_cache.has(handle)) {

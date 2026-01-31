@@ -1,8 +1,8 @@
 /**
- * Обработка ввода для WebRTC веб-приложения
+ * Input handling for Selkies gst-web-react using Warplay control-plane only.
+ * Ported from warplay-srs-server/client (simple-webrtc-client.js) semantics.
  */
 
-import { Queue } from './util';
 import type { WarplayControl } from './warplayControl';
 
 export interface InputCallbacks {
@@ -11,35 +11,43 @@ export interface InputCallbacks {
   onresizeend?: () => void;
 }
 
-type Listener = [EventTarget, string, EventListener];
+type Listener = [EventTarget, string, EventListener, AddEventListenerOptions | boolean | undefined];
 
+type ResolutionData = {
+  scaleX: number;
+  scaleY: number;
+  offsetX: number;
+  offsetY: number;
+  maxW: number;
+  maxH: number;
+};
 
 export class Input {
   public element: HTMLVideoElement;
   private control: WarplayControl | null = null;
-  public mouseRelative: boolean = false;
-  private buttonMask: number = 0;
-  private pressedKeys: Set<number> = new Set();
-  public x: number = 0;
-  public y: number = 0;
-  public cursorScaleFactor: number | null = null;
 
   private callbacks: InputCallbacks = {};
   private listeners: Listener[] = [];
   private listeners_context: Listener[] = [];
-  private _queue: Queue<number> = new Queue();
 
-  // Переменные для resize
+  private isPointerLocked = false;
+  private pointerLockTimestamp = 0;
+  private waitPointerLockClick = false;
+  private resolutionData: ResolutionData | null = null;
+  private lastVideoW = 0;
+  private lastVideoH = 0;
+  private resolutionProbeTimer: number | null = null;
+
+  private prevInlineWidth: string | null = null;
+  private prevInlineHeight: string | null = null;
+
+  private pressedKeys: Set<number> = new Set();
+  private buttonMask = 0;
+
+  // Resize end detection (kept for existing UI code paths).
   private _rtime: Date | null = null;
-  private _rtimeout: boolean = false;
-  private _rdelta: number = 500;
-
-  // Переменные для мыши и тачпада
-  private _allowTrackpadScrolling: boolean = true;
-  private _allowThreshold: boolean = true;
-  private _smallestDeltaY: number = 10000;
-  private _wheelThreshold: number = 100;
-  private _scrollMagnitude: number = 10;
+  private _rtimeout = false;
+  private _rdelta = 500;
 
   constructor(element: HTMLVideoElement) {
     this.element = element;
@@ -53,437 +61,262 @@ export class Input {
     this.callbacks = { ...this.callbacks, ...callbacks };
   }
 
-  private warplayAbsMouseFromClient(clientX: number, clientY: number): { x16: number; y16: number } | null {
+  private updateResolutionData(): void {
+    const containerW = this.element.offsetWidth;
+    const containerH = this.element.offsetHeight;
     const videoW = this.element.videoWidth;
     const videoH = this.element.videoHeight;
-    if (!videoW || !videoH) return null;
+    if (!containerW || !containerH || !videoW || !videoH) return;
 
-    const rect = this.element.getBoundingClientRect();
-    const containerW = rect.width;
-    const containerH = rect.height;
-    if (!containerW || !containerH) return null;
-
-    const fit = getComputedStyle(this.element).objectFit || 'fill';
-
-    const toAbs = (absX: number, absY: number): { x16: number; y16: number } => {
-      const clampedX = Math.max(0, Math.min(videoW, Math.round(absX)));
-      const clampedY = Math.max(0, Math.min(videoH, Math.round(absY)));
-      const x16 = Math.round((clampedX / videoW) * 65535);
-      const y16 = Math.round((clampedY / videoH) * 65535);
-      return { x16, y16 };
-    };
-
-    const localX0 = clientX - rect.left;
-    const localY0 = clientY - rect.top;
-
-    // If the element stretches the video (default object-fit: fill), map directly to the element box.
-    if (fit === 'fill') {
-      const absX = localX0 * (videoW / containerW);
-      const absY = localY0 * (videoH / containerH);
-      return toAbs(absX, absY);
-    }
-
-    // Otherwise, approximate based on the selected fit mode.
-    let ratio: number;
-    if (fit === 'cover') {
-      ratio = Math.max(containerW / videoW, containerH / videoH);
-    } else if (fit === 'scale-down') {
-      ratio = Math.min(1, Math.min(containerW / videoW, containerH / videoH));
-    } else if (fit === 'none') {
-      ratio = 1;
-    } else {
-      // contain (default)
-      ratio = Math.min(containerW / videoW, containerH / videoH);
-    }
-
+    const ratio = Math.min(containerW / videoW, containerH / videoH);
     const dispW = videoW * ratio;
     const dispH = videoH * ratio;
-    const offsetX = (containerW - dispW) / 2;
-    const offsetY = (containerH - dispH) / 2;
 
-    const localX = localX0 - offsetX;
-    const localY = localY0 - offsetY;
-
-    const clampedLocalX = Math.max(0, Math.min(dispW, localX));
-    const clampedLocalY = Math.max(0, Math.min(dispH, localY));
-
-    const absX = clampedLocalX * (videoW / dispW);
-    const absY = clampedLocalY * (videoH / dispH);
-    return toAbs(absX, absY);
+    this.resolutionData = {
+      scaleX: videoW / dispW,
+      scaleY: videoH / dispH,
+      offsetX: Math.max((containerW - dispW) / 2, 0),
+      offsetY: Math.max((containerH - dispH) / 2, 0),
+      maxW: videoW,
+      maxH: videoH,
+    };
   }
 
-  /**
-   * Вычисляет масштабный коэффициент курсора когда клиент и сервер имеют разные разрешения
-   */
-  getCursorScaleFactor({ remoteResolutionEnabled = false }: { remoteResolutionEnabled?: boolean } = {}): void {
-    if (remoteResolutionEnabled) {
-      this.cursorScaleFactor = null;
-      return;
-    }
+  private sendAbsMouseFromEvent(e: MouseEvent): void {
+    if (!this.control || !this.control.isConnected() || !this.resolutionData) return;
+    const rect = this.element.getBoundingClientRect();
+    const { scaleX, scaleY, offsetX, offsetY, maxW, maxH } = this.resolutionData;
 
-    const clientResolution = this.getWindowResolution();
-    const serverHeight = this.element.videoHeight;
-    const serverWidth = this.element.videoWidth;
+    let localX = (e.clientX - rect.left) - offsetX;
+    let localY = (e.clientY - rect.top) - offsetY;
 
-    if (isNaN(serverWidth) || isNaN(serverHeight)) {
-      console.log("Invalid video height and width");
-      return;
-    }
+    const displayedW = maxW / scaleX;
+    const displayedH = maxH / scaleY;
 
-    if (Math.abs(clientResolution[0] - serverWidth) <= 10 && Math.abs(clientResolution[1] - serverHeight) <= 10) {
-      return;
-    }
+    // Stretch the input area to the video itself: clamp to the rendered video edges.
+    localX = Math.max(0, Math.min(displayedW, localX));
+    localY = Math.max(0, Math.min(displayedH, localY));
 
-    this.cursorScaleFactor = Math.sqrt((serverWidth ** 2) + (serverHeight ** 2)) / Math.sqrt((clientResolution[0] ** 2) + (clientResolution[1] ** 2));
+    let absX = Math.round(localX * scaleX);
+    let absY = Math.round(localY * scaleY);
+    absX = Math.max(0, Math.min(maxW, absX));
+    absY = Math.max(0, Math.min(maxH, absY));
+
+    const x16 = Math.round((absX / maxW) * 65535);
+    const y16 = Math.round((absY / maxH) * 65535);
+    this.control.sendInputPacket(this.control.encodeAbsMouse(x16, y16));
   }
 
-  /**
-   * Обрабатывает события кнопок мыши и движения
-   */
-  private mouseButtonMovement = (event: Event): void => {
-    const mouseEvent = event as MouseEvent;
-    const down = (mouseEvent.type === 'mousedown' ? 1 : 0);
-
-    if (!document.pointerLockElement) {
-      if (this.mouseRelative) {
-        this.element.requestPointerLock().then(
-          () => {
-            console.log("pointer lock success");
-          }
-        ).catch(
-          (e) => {
-            console.log("pointer lock failed: ", e);
-          }
-        );
-      }
-    }
-
-    // Горячая клавиша для включения pointer lock, Ctrl-Shift-LeftClick
-    if (down && mouseEvent.button === 0 && mouseEvent.ctrlKey && mouseEvent.shiftKey) {
-      this.element.requestPointerLock().then(
-        () => {
-          console.log("pointer lock success");
-        }
-      ).catch(
-        (e) => {
-          console.log("pointer lock failed: ", e);
-        }
-      );
-      return;
-    }
-
+  private mouseMove = (event: Event): void => {
+    const e = event as MouseEvent;
     const controlConfigured = !!this.control;
     const controlReady = controlConfigured && this.control!.isConnected();
+
     if (controlConfigured && !controlReady) {
-      mouseEvent.preventDefault();
-      mouseEvent.stopPropagation();
+      e.preventDefault();
+      e.stopPropagation();
       return;
     }
     if (!controlReady) return;
 
-    if (document.pointerLockElement) {
-      if (this.cursorScaleFactor != null) {
-        this.x = Math.trunc(mouseEvent.movementX * this.cursorScaleFactor);
-        this.y = Math.trunc(mouseEvent.movementY * this.cursorScaleFactor);
-      } else {
-        this.x = mouseEvent.movementX;
-        this.y = mouseEvent.movementY;
+    if (this.isPointerLocked) {
+      const dx = e.movementX;
+      const dy = e.movementY;
+      if (dx !== 0 || dy !== 0) {
+        this.control!.sendInputPacket(this.control!.encodeMouseMove(dx, dy));
       }
-
-      if (mouseEvent.type === 'mousemove' && (this.x !== 0 || this.y !== 0)) {
-        this.control!.sendInputPacket(this.control!.encodeMouseMove(this.x, this.y));
-        mouseEvent.preventDefault();
-        mouseEvent.stopPropagation();
-        return;
-      }
-    } else if (mouseEvent.type === 'mousemove') {
-      const abs = this.warplayAbsMouseFromClient(mouseEvent.clientX, mouseEvent.clientY);
-      if (abs) {
-        this.control!.sendInputPacket(this.control!.encodeAbsMouse(abs.x16, abs.y16));
-        mouseEvent.preventDefault();
-        mouseEvent.stopPropagation();
-        return;
-      }
+    } else {
+      if (!this.resolutionData) return;
+      this.sendAbsMouseFromEvent(e);
     }
 
-    if (mouseEvent.type === 'mousedown' || mouseEvent.type === 'mouseup') {
-      this.control!.sendInputPacket(this.control!.encodeMouseButton(mouseEvent.button, down === 1));
-      const mask = 1 << mouseEvent.button;
-      if (down) {
-        this.buttonMask |= mask;
-      } else {
-        this.buttonMask &= ~mask;
-      }
-      mouseEvent.preventDefault();
-      mouseEvent.stopPropagation();
-    }
+    e.preventDefault();
+    e.stopPropagation();
   };
 
-  /**
-   * Обрабатывает touch события
-   */
-  private touch = (event: Event): void => {
-    const touchEvent = event as TouchEvent;
-    const controlConfigured = !!this.control;
-    const controlReady = controlConfigured && this.control!.isConnected();
+  private mouseDown = (event: Event): void => {
+    const e = event as MouseEvent;
+    e.preventDefault();
+    e.stopPropagation();
 
-    if (touchEvent.type === 'touchstart') {
-      this.buttonMask |= 1;
-    } else if (touchEvent.type === 'touchend') {
-      this.buttonMask &= ~1;
-    } else if (touchEvent.type === 'touchmove') {
-      touchEvent.preventDefault();
+    if (this.waitPointerLockClick) {
+      this.waitPointerLockClick = false;
+      try {
+        this.element.requestPointerLock();
+      } catch { }
     }
 
-    const clientX = touchEvent.changedTouches[0].clientX;
-    const clientY = touchEvent.changedTouches[0].clientY;
+    if (!this.control || !this.control.isConnected()) return;
+    if (!this.isPointerLocked) this.sendAbsMouseFromEvent(e);
 
-    if (controlConfigured && !controlReady) {
-      touchEvent.preventDefault();
-      return;
-    }
-    if (!controlReady) return;
-
-    const abs = this.warplayAbsMouseFromClient(clientX, clientY);
-    if (abs) {
-      this.control!.sendInputPacket(this.control!.encodeAbsMouse(abs.x16, abs.y16));
-    }
-    if (touchEvent.type === 'touchstart') {
-      this.control!.sendInputPacket(this.control!.encodeMouseButton(0, true));
-    } else if (touchEvent.type === 'touchend') {
-      this.control!.sendInputPacket(this.control!.encodeMouseButton(0, false));
-    }
+    this.control.sendInputPacket(this.control.encodeMouseButton(e.button, true));
+    this.buttonMask |= 1 << e.button;
   };
 
-  /**
-   * Сбрасывает порог если значения указателя относятся к типу мыши
-   */
-  private dropThreshold(): boolean {
-    let count = 0;
-    let val1 = this._queue.dequeue();
-    while (!this._queue.isEmpty()) {
-      const valNext = this._queue.dequeue();
-      if (valNext !== undefined && valNext >= 80 && val1 === valNext) {
-        count++;
-      }
-      val1 = valNext;
-    }
-    return count >= 2;
-  }
+  private mouseUp = (event: Event): void => {
+    const e = event as MouseEvent;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!this.control || !this.control.isConnected()) return;
 
-  /**
-   * Обертка для _mouseWheel для корректировки прокрутки в зависимости от устройства указателя
-   */
-  private mouseWheelWrapper = (event: Event): void => {
-    const wheelEvent = event as WheelEvent;
-    const deltaY = Math.trunc(Math.abs(wheelEvent.deltaY));
-
-    if (this._queue.size() < 4) {
-      this._queue.enqueue(deltaY);
-    }
-
-    if (this._queue.size() === 4) {
-      if (this.dropThreshold()) {
-        this._allowThreshold = false;
-        this._smallestDeltaY = 10000;
-      } else {
-        this._allowThreshold = true;
-      }
-    }
-
-    if (this._allowThreshold && this._allowTrackpadScrolling) {
-      this._allowTrackpadScrolling = false;
-      this.mouseWheel(wheelEvent);
-      setTimeout(() => this._allowTrackpadScrolling = true, this._wheelThreshold);
-    } else if (!this._allowThreshold) {
-      this.mouseWheel(wheelEvent);
-    }
+    if (!this.isPointerLocked) this.sendAbsMouseFromEvent(e);
+    this.control.sendInputPacket(this.control.encodeMouseButton(e.button, false));
+    this.buttonMask &= ~(1 << e.button);
   };
 
-  /**
-   * Обрабатывает события колесика мыши
-   */
-  private mouseWheel = (event: WheelEvent): void => {
+  private wheel = (event: Event): void => {
+    const e = event as WheelEvent;
     const controlConfigured = !!this.control;
     const controlReady = controlConfigured && this.control!.isConnected();
     if (controlConfigured && !controlReady) {
-      event.preventDefault();
-      event.stopPropagation();
+      e.preventDefault();
+      e.stopPropagation();
       return;
     }
     if (controlReady) {
-      this.control!.sendInputPacket(this.control!.encodeWheel(-event.deltaY));
-      event.preventDefault();
-      event.stopPropagation();
-      return;
+      this.control!.sendInputPacket(this.control!.encodeWheel(-e.deltaY));
+      e.preventDefault();
+      e.stopPropagation();
     }
-    // Legacy scroll-to-datachannel is removed; prevent page scroll while over the video element.
-    event.preventDefault();
   };
 
-  /**
-   * Захватывает контекстное меню мыши (правый клик) и предотвращает распространение события
-   */
   private contextMenu = (event: Event): void => {
     event.preventDefault();
+    event.stopPropagation();
   };
 
-  /**
-   * Захватывает события клавиатуры для обнаружения нажатия CTRL-SHIFT горячих клавиш
-   */
   private key = (event: Event): void => {
-    const keyboardEvent = event as KeyboardEvent;
-    // Отключаем проблемные горячие клавиши браузера
-    if ((keyboardEvent.code === 'F5' && keyboardEvent.ctrlKey) ||
-      (keyboardEvent.code === 'KeyI' && keyboardEvent.ctrlKey && keyboardEvent.shiftKey) ||
-      (keyboardEvent.code === 'F11')) {
-      keyboardEvent.preventDefault();
-      return;
-    }
-
-    // Захватываем горячую клавишу меню
-    if (keyboardEvent.type === 'keydown' && keyboardEvent.code === 'KeyM' && keyboardEvent.ctrlKey && keyboardEvent.shiftKey) {
-      if (document.fullscreenElement === null && this.callbacks.onmenuhotkey) {
-        this.callbacks.onmenuhotkey();
-        keyboardEvent.preventDefault();
-      }
-      return;
-    }
-
-    // Захватываем горячую клавишу полноэкранного режима
-    if (keyboardEvent.type === 'keydown' && keyboardEvent.code === 'KeyF' && keyboardEvent.ctrlKey && keyboardEvent.shiftKey) {
-      if (document.fullscreenElement === null && this.callbacks.onfullscreenhotkey) {
-        this.callbacks.onfullscreenhotkey();
-        keyboardEvent.preventDefault();
-      }
-      return;
-    }
+    const e = event as KeyboardEvent;
 
     const controlConfigured = !!this.control;
     const controlReady = controlConfigured && this.control!.isConnected();
     if (controlReady) {
-      // warplay control expects vk_code (u16). Use legacy keyCode for compatibility.
-      const vk = keyboardEvent.keyCode || 0;
-      const down = keyboardEvent.type === 'keydown';
+      const vk = e.keyCode || 0;
+      const down = e.type === 'keydown';
       this.control!.sendInputPacket(this.control!.encodeKey(vk, down));
       if (vk) {
         if (down) this.pressedKeys.add(vk);
         else this.pressedKeys.delete(vk);
       }
-      keyboardEvent.preventDefault();
-      keyboardEvent.stopPropagation();
+      e.preventDefault();
+      e.stopPropagation();
     } else if (controlConfigured) {
-      keyboardEvent.preventDefault();
-      keyboardEvent.stopPropagation();
+      e.preventDefault();
+      e.stopPropagation();
     }
   };
 
-  private exitPointerLock = (): void => {
-    try {
-      document.exitPointerLock();
-    } catch { }
+  private onPointerLockChange = (): void => {
+    this.isPointerLocked = (document.pointerLockElement === this.element);
+    if (this.isPointerLocked) this.pointerLockTimestamp = performance.now();
+    if (this.isPointerLocked) this.waitPointerLockClick = false;
   };
 
-  // Gamepad input is handled by Warplay control-plane (separate WebRTC connection).
-
-  /**
-   * Когда включается полноэкранный режим, запрашивает блокировку клавиатуры и указателя
-   */
   private onFullscreenChange = (): void => {
-    if (document.fullscreenElement !== null) {
+    const isFullscreen = document.fullscreenElement === this.element;
+    if (isFullscreen) {
+      if (this.prevInlineWidth === null) this.prevInlineWidth = this.element.style.width;
+      if (this.prevInlineHeight === null) this.prevInlineHeight = this.element.style.height;
+      this.element.style.width = '100%';
+      this.element.style.height = '100%';
+
       if (document.pointerLockElement === null) {
-        this.element.requestPointerLock().then(
-          () => {
-            console.log("pointer lock success");
-          }
-        ).catch(
-          (e) => {
-            console.log("pointer lock failed: ", e);
-          }
-        );
+        try {
+          this.element.requestPointerLock();
+        } catch { }
       }
       this.requestKeyboardLock();
+    } else {
+      if (this.prevInlineWidth !== null) this.element.style.width = this.prevInlineWidth;
+      if (this.prevInlineHeight !== null) this.element.style.height = this.prevInlineHeight;
+      this.prevInlineWidth = null;
+      this.prevInlineHeight = null;
     }
     this.resetInputState();
+    this.updateResolutionData();
   };
 
-  /**
-   * Вызывается когда окно изменяет размер, используется для обнаружения когда изменение размера заканчивается
-   */
   private resizeStart = (): void => {
     this._rtime = new Date();
-    if (this._rtimeout === false) {
+    if (!this._rtimeout) {
       this._rtimeout = true;
       setTimeout(() => { this.resizeEnd(); }, this._rdelta);
     }
   };
 
-  /**
-   * Вызывается в setTimeout цикле для обнаружения если изменение размера окна завершено
-   */
   private resizeEnd = (): void => {
     if (this._rtime && new Date().getTime() - this._rtime.getTime() < this._rdelta) {
       setTimeout(() => { this.resizeEnd(); }, this._rdelta);
     } else {
       this._rtimeout = false;
-      if (this.callbacks.onresizeend) {
-        this.callbacks.onresizeend();
-      }
+      this.callbacks.onresizeend?.();
     }
   };
 
-  /**
-   * Прикрепляет обработчики событий ввода к document, window и element
-   */
   attach(): void {
-    this.addListener(this.element.parentElement!, 'fullscreenchange', this.onFullscreenChange);
+    try {
+      this.element.setAttribute('tabindex', '0');
+    } catch { }
+
+    this.addListener(document, 'pointerlockchange', this.onPointerLockChange);
+    this.addListener(document, 'pointerlockerror', () => { }, undefined);
+    this.addListener(this.element, 'loadedmetadata', () => this.updateResolutionData());
+    this.addListener(window, 'resize', () => this.updateResolutionData());
     this.addListener(window, 'resize', this.resizeStart);
+    this.addListener(document, 'fullscreenchange', this.onFullscreenChange);
     this.addListener(window, 'blur', () => this.resetInputState());
     this.addListener(document, 'visibilitychange', () => {
       if (document.visibilityState !== 'visible') this.resetInputState();
     });
 
+    // Detect video resolution changes (requestVideoFrameCallback if available).
+    const checkResolutionChange = () => {
+      const w = this.element.videoWidth;
+      const h = this.element.videoHeight;
+      if (w && h && (w !== this.lastVideoW || h !== this.lastVideoH)) {
+        this.lastVideoW = w;
+        this.lastVideoH = h;
+        this.updateResolutionData();
+      }
+    };
+
+    if ((this.element as any).requestVideoFrameCallback) {
+      const loop = () => {
+        checkResolutionChange();
+        (this.element as any).requestVideoFrameCallback(loop);
+      };
+      (this.element as any).requestVideoFrameCallback(loop);
+    } else {
+      this.resolutionProbeTimer = window.setInterval(checkResolutionChange, 500);
+    }
+
+    this.updateResolutionData();
     this.attach_context();
   }
 
   attach_context(): void {
-    this.addListenerContext(this.element, 'wheel', this.mouseWheelWrapper);
-    this.addListenerContext(this.element, 'contextmenu', this.contextMenu);
-    this.addListenerContext(window, 'keydown', this.key);
-    this.addListenerContext(window, 'keyup', this.key);
-
-    if ('ontouchstart' in window) {
-      this.addListenerContext(window, 'touchstart', this.touch);
-      this.addListenerContext(this.element, 'touchend', this.touch);
-      this.addListenerContext(this.element, 'touchmove', this.touch);
-    } else {
-      this.addListenerContext(this.element, 'mousemove', this.mouseButtonMovement);
-      this.addListenerContext(this.element, 'mousedown', this.mouseButtonMovement);
-      this.addListenerContext(this.element, 'mouseup', this.mouseButtonMovement);
-    }
-
-    if (document.fullscreenElement !== null && document.pointerLockElement === null) {
-      this.element.requestPointerLock().then(
-        () => {
-          console.log("pointer lock success");
-        }
-      ).catch(
-        (e) => {
-          console.log("pointer lock failed: ", e);
-        }
-      );
-    }
+    this.addListenerContext(this.element, 'mousemove', this.mouseMove, { passive: false });
+    this.addListenerContext(this.element, 'mousedown', this.mouseDown, { passive: false });
+    this.addListenerContext(this.element, 'mouseup', this.mouseUp, { passive: false });
+    this.addListenerContext(this.element, 'wheel', this.wheel, { passive: false });
+    this.addListenerContext(this.element, 'contextmenu', this.contextMenu, { passive: false });
+    this.addListenerContext(window, 'keydown', this.key, undefined);
+    this.addListenerContext(window, 'keyup', this.key, undefined);
   }
 
   detach(): void {
     this.removeListeners(this.listeners);
     this.detach_context();
+    if (this.resolutionProbeTimer !== null) {
+      window.clearInterval(this.resolutionProbeTimer);
+      this.resolutionProbeTimer = null;
+    }
   }
 
   detach_context(): void {
     this.removeListeners(this.listeners_context);
     this.resetInputState();
-    this.exitPointerLock();
+    try { document.exitPointerLock(); } catch { }
   }
 
   resetInputState(): void {
@@ -507,54 +340,18 @@ export class Input {
   }
 
   enterFullscreen(): void {
-    if (document.pointerLockElement === null) {
-      this.element.requestPointerLock().then(
-        () => {
-          console.log("pointer lock success");
-        }
-      ).catch(
-        (e) => {
-          console.log("pointer lock failed: ", e);
-        }
-      );
-    }
-    if (document.fullscreenElement === null) {
-      this.element.parentElement!.requestFullscreen().then(
-        () => {
-          console.log("fullscreen success");
-        }
-      ).catch(
-        (e) => {
-          console.log("fullscreen failed: ", e);
-        }
-      );
-    }
+    try {
+      if (document.pointerLockElement === null) this.element.requestPointerLock();
+    } catch { }
+    try {
+      if (document.fullscreenElement === null) this.element.requestFullscreen();
+    } catch { }
   }
 
-  /**
-   * Запрашивает блокировку клавиатуры, должен быть в полноэкранном режиме для работы
-   */
   requestKeyboardLock(): void {
     if ('keyboard' in navigator && 'lock' in (navigator as any).keyboard) {
-      const keys = [
-        "AltLeft",
-        "AltRight",
-        "Tab",
-        "Escape",
-        "ContextMenu",
-        "MetaLeft",
-        "MetaRight"
-      ];
-      console.log("requesting keyboard lock");
-      (navigator as any).keyboard.lock(keys).then(
-        () => {
-          console.log("keyboard lock success");
-        }
-      ).catch(
-        (e: any) => {
-          console.log("keyboard lock failed: ", e);
-        }
-      );
+      const keys = ["AltLeft", "AltRight", "Tab", "Escape", "ContextMenu", "MetaLeft", "MetaRight"];
+      (navigator as any).keyboard.lock(keys).catch(() => { });
     }
   }
 
@@ -571,30 +368,30 @@ export class Input {
     ];
   }
 
-  /**
-   * Принудительно обновляет математику окна (область ввода) после изменения размера
-   * Используется когда размер видео элемента изменяется программно
-   */
+  getCursorScaleFactor({ remoteResolutionEnabled = false }: { remoteResolutionEnabled?: boolean } = {}): void {
+    // Kept for compatibility with existing callers; pointer-lock uses raw movementX/Y.
+    void remoteResolutionEnabled;
+  }
+
   updateWindowMath(): void {
-    // Используем requestAnimationFrame для обновления после того, как браузер обновит размеры
-    requestAnimationFrame(() => {
-      // No-op: legacy window math removed (input is mapped to the video element rect).
-    });
+    // Compatibility no-op (legacy Selkies input path removed).
   }
 
-  private addListener(target: EventTarget, event: string, handler: EventListener): void {
-    target.addEventListener(event, handler);
-    this.listeners.push([target, event, handler]);
+  private addListener(target: EventTarget, event: string, handler: EventListener, options?: AddEventListenerOptions | boolean): void {
+    target.addEventListener(event, handler, options);
+    this.listeners.push([target, event, handler, options]);
   }
 
-  private addListenerContext(target: EventTarget, event: string, handler: EventListener): void {
-    target.addEventListener(event, handler);
-    this.listeners_context.push([target, event, handler]);
+  private addListenerContext(target: EventTarget, event: string, handler: EventListener, options?: AddEventListenerOptions | boolean): void {
+    target.addEventListener(event, handler, options);
+    this.listeners_context.push([target, event, handler, options]);
   }
 
   private removeListeners(listeners: Listener[]): void {
-    listeners.forEach(([target, event, handler]) => {
-      target.removeEventListener(event, handler);
+    listeners.forEach(([target, event, handler, options]) => {
+      target.removeEventListener(event, handler, options);
     });
+    listeners.length = 0;
   }
 }
+
